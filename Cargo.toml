@@ -1,5 +1,9 @@
 [package]
-name = "shuttle"
+# Renamed from `shuttle` because that crate name is squatted on
+# crates.io by an unrelated AWS Labs library. We namespace under
+# `omegon-` to match the SDK crate (`omegon-extension`) — the
+# extension's omegon-side identifier and CLI surface stay "shuttle".
+name = "omegon-shuttle"
 version = "0.1.0"
 edition = "2021"
 license = "MIT"
@@ -7,6 +11,22 @@ repository = "https://github.com/styrene-lab/shuttle"
 description = "Pure-Rust SSH remote execution extension for Omegon — HKDF-derived key auth, no key files on disk"
 keywords = ["ssh", "remote", "omegon", "extension", "hkdf"]
 categories = ["network-programming", "authentication"]
+
+# Primary binary keeps the `shuttle` name so omegon's extension manifest
+# (`runtime.binary = "shuttle"`) and the operator-facing surface don't
+# need to change just because the crate was renamed for crates.io
+# uniqueness.
+[[bin]]
+name = "shuttle"
+path = "src/main.rs"
+
+# Library name stays `shuttle` so internal `use shuttle::*` paths in
+# main.rs / tests still resolve. Cargo lets package name and lib name
+# diverge; package name is what crates.io tracks, lib name is what
+# Rust code references.
+[lib]
+name = "shuttle"
+path = "src/lib.rs"
 
 [dependencies]
 # Omegon extension SDK — published to crates.io so `omegon extension install`
