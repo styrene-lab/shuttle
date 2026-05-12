@@ -1,0 +1,67 @@
+name: release-plz
+
+# Auto-publishes shuttle to crates.io on every push to main.
+#
+# release-plz scans commit history since the last tag, generates a
+# CHANGELOG entry, opens a "release PR" with a version bump. When
+# that PR is merged, the release job tags the commit and runs
+# `cargo publish`.
+#
+# Requires repo secret CARGO_REGISTRY_TOKEN (set at the org level
+# under styrene-labs). Generate at https://crates.io/me with publish
+# scope on the shuttle crate.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  release-plz-release:
+    name: Release
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'styrene-lab' }}
+    concurrency:
+      group: release-plz-release-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: release-plz release
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+  release-plz-pr:
+    name: Release PR
+    runs-on: ubuntu-latest
+    if: ${{ github.repository_owner == 'styrene-lab' }}
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: release-plz release-pr
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

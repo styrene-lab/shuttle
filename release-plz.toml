@@ -1,0 +1,10 @@
+# release-plz configuration for the shuttle crate.
+#
+# Single-crate repo — the package-level defaults are fine. Override
+# any field per-package if needed (e.g. changelog_path).
+
+[workspace]
+changelog_update = true
+git_release_enable = true
+git_tag_enable = true
+publish_features = []
