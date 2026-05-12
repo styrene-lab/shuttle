@@ -9,11 +9,13 @@ keywords = ["ssh", "remote", "omegon", "extension", "hkdf"]
 categories = ["network-programming", "authentication"]
 
 [dependencies]
-# Omegon extension SDK
-omegon-extension = { path = "../omegon/core/crates/omegon-extension" }
+# Omegon extension SDK — published to crates.io so `omegon extension install`
+# can clone-and-build this repo standalone without sibling repos checked
+# out under ../omegon/.
+omegon-extension = "0.20"
 
-# Styrene identity — HKDF key derivation + ed25519
-styrene-identity = { path = "../styrene-rs/crates/libs/styrene-identity", features = ["file-signer"] }
+# Styrene identity — HKDF key derivation + ed25519.
+styrene-identity = { version = "0.3", features = ["file-signer"] }
 
 # SSH
 russh = "0.46"
