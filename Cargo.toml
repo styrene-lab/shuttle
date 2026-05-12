@@ -1,0 +1,49 @@
+[package]
+name = "shuttle"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/styrene-lab/shuttle"
+description = "Pure-Rust SSH remote execution extension for Omegon — HKDF-derived key auth, no key files on disk"
+keywords = ["ssh", "remote", "omegon", "extension", "hkdf"]
+categories = ["network-programming", "authentication"]
+
+[dependencies]
+# Omegon extension SDK
+omegon-extension = { path = "../omegon/core/crates/omegon-extension" }
+
+# Styrene identity — HKDF key derivation + ed25519
+styrene-identity = { path = "../styrene-rs/crates/libs/styrene-identity", features = ["file-signer"] }
+
+# SSH
+russh = "0.46"
+russh-keys = "0.46"
+russh-sftp = "2"
+
+# Crypto
+ed25519-dalek = { version = "=2.1.1", features = ["rand_core"] }
+ssh-key = { version = "0.6", features = ["ed25519"] }
+zeroize = { version = "1", features = ["derive"] }
+rand_core = { version = "0.6", features = ["getrandom"] }
+
+# Async runtime
+tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time", "fs"] }
+async-trait = "0.1"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Utilities
+hex = "0.4"
+dirs = "6"
+base64 = "0.22"

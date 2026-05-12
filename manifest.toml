@@ -1,0 +1,62 @@
+[extension]
+name = "shuttle"
+version = "0.1.0"
+description = "Pure-Rust SSH remote execution — run commands, transfer files, manage tunnels via styrene-identity HKDF-derived keys."
+sdk_version = "0.19"
+
+[runtime]
+type = "native"
+binary = "shuttle"
+
+[startup]
+ping_method = "get_tools"
+timeout_ms = 5000
+
+[skill]
+guidance = "SKILL.md"
+
+# NOTE: Shuttle requires the STYRENE_PASSPHRASE environment variable to be set
+# before omegon starts. This unlocks the encrypted identity file used for
+# SSH key derivation. Set it in the omegon service config or secrets manager.
+
+[config.hosts_file]
+type = "string"
+label = "Host definitions file"
+description = "Path to hosts.toml defining remote machines (name, address, user, port, identity label)."
+default = "~/.omegon/shuttle/hosts.toml"
+
+[config.default_timeout_secs]
+type = "number"
+label = "Default command timeout (seconds)"
+description = "Max seconds before an ssh_exec or ssh_script call is killed."
+default = "30"
+
+[config.max_output_bytes]
+type = "number"
+label = "Max output size (bytes)"
+description = "Maximum bytes returned from a single command execution."
+default = "1048576"
+
+[config.allowed_hosts]
+type = "string"
+label = "Allowed hosts"
+description = "Comma-separated host names the agent may connect to. Empty means all configured hosts."
+required = false
+
+[config.connection_pool_size]
+type = "number"
+label = "Connection pool size"
+description = "Max idle SSH connections to keep open across hosts."
+default = "4"
+
+[config.known_hosts_file]
+type = "string"
+label = "Known hosts file"
+description = "Path to known_hosts for server key verification. Created on first use if absent."
+default = "~/.omegon/shuttle/known_hosts"
+
+[config.allowed_tunnel_destinations]
+type = "string"
+label = "Allowed tunnel destinations"
+description = "Comma-separated host:port pairs the agent may tunnel to (e.g. '127.0.0.1:5432,db.internal:*'). If unset, only loopback destinations are permitted."
+required = false
