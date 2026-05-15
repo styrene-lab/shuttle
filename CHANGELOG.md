@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/styrene-lab/shuttle/compare/v0.1.0...v0.1.1) - 2026-05-15
+
+### Other
+
+- add changelog for v0.1.0 release
+- *(release)* re-add aarch64-unknown-linux-gnu — all openssl-free now
+- *(release)* drop aarch64-unknown-linux-gnu from default matrix
+
 ## [0.1.0] - 2026-05-15
 
 ### Added
