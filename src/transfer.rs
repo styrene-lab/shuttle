@@ -3,7 +3,7 @@ use crate::config::ShuttleConfig;
 use serde_json::{json, Value};
 use std::path::Path;
 use std::sync::Arc;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::Mutex;
 
 /// Sensitive path prefixes under $HOME that are always blocked.
@@ -43,7 +43,10 @@ const BLOCKED_ABSOLUTE_PREFIXES: &[&str] = &[
 /// - Path traversal (`..` after canonicalization)
 /// - Sensitive directories under `$HOME` (credentials, identity, config)
 /// - System directories (`/etc`, `/proc`, `/var/run/secrets`)
-fn validate_local_path(path: &str) -> omegon_extension::Result<std::path::PathBuf> {
+fn validate_local_path(
+    path: &str,
+    allowed_roots: &Option<Vec<std::path::PathBuf>>,
+) -> omegon_extension::Result<std::path::PathBuf> {
     let p = Path::new(path);
 
     let canonical = p
@@ -56,15 +59,24 @@ fn validate_local_path(path: &str) -> omegon_extension::Result<std::path::PathBu
                     std::io::Error::new(std::io::ErrorKind::NotFound, "parent dir not found")
                 })
         })
-        .map_err(|e| {
-            omegon_extension::Error::invalid_params(format!("invalid path: {e}"))
-        })?;
+        .map_err(|e| omegon_extension::Error::invalid_params(format!("invalid path: {e}")))?;
 
     let canonical_str = canonical.to_string_lossy();
     if canonical_str.contains("..") {
         return Err(omegon_extension::Error::invalid_params(
             "path traversal not allowed",
         ));
+    }
+
+    // Positive allowlist: local transfer paths must remain under an
+    // operator-approved root (defaults to the process cwd). The sensitive
+    // blocklist below remains defense-in-depth.
+    if let Some(roots) = allowed_roots {
+        if !roots.iter().any(|root| canonical.starts_with(root)) {
+            return Err(omegon_extension::Error::invalid_params(
+                "local path is outside allowed_local_roots",
+            ));
+        }
     }
 
     // Block system directories (absolute paths outside $HOME)
@@ -91,10 +103,29 @@ fn validate_local_path(path: &str) -> omegon_extension::Result<std::path::PathBu
     Ok(canonical)
 }
 
+fn validate_remote_path(
+    path: &str,
+    allowed_roots: &Option<Vec<String>>,
+    operation: &str,
+) -> omegon_extension::Result<()> {
+    if let Some(roots) = allowed_roots {
+        let normalized = path.trim_end_matches('/');
+        if !roots
+            .iter()
+            .any(|root| normalized == root || normalized.starts_with(&format!("{root}/")))
+        {
+            return Err(omegon_extension::Error::invalid_params(format!(
+                "remote {operation} path is outside configured allowed roots"
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Copy a local file to a remote host via SFTP.
 pub async fn scp_push(
     client: &Arc<Mutex<SshClient>>,
-    _config: &ShuttleConfig,
+    config: &ShuttleConfig,
     params: &Value,
 ) -> omegon_extension::Result<Value> {
     let local_path = params
@@ -107,7 +138,7 @@ pub async fn scp_push(
         .and_then(|v| v.as_str())
         .ok_or_else(|| omegon_extension::Error::invalid_params("missing 'remote_path'"))?;
 
-    let local = validate_local_path(local_path)?;
+    let local = validate_local_path(local_path, &config.allowed_local_roots)?;
     if !local.exists() {
         return Err(omegon_extension::Error::invalid_params(format!(
             "local file not found: {local_path}"
@@ -118,6 +149,8 @@ pub async fn scp_push(
             "local path is not a file: {local_path}"
         )));
     }
+
+    validate_remote_path(remote_path, &config.allowed_remote_write_roots, "write")?;
 
     let data = tokio::fs::read(&local)
         .await
@@ -149,7 +182,7 @@ pub async fn scp_push(
 /// Copy a remote file to the local machine via SFTP.
 pub async fn scp_pull(
     client: &Arc<Mutex<SshClient>>,
-    _config: &ShuttleConfig,
+    config: &ShuttleConfig,
     params: &Value,
 ) -> omegon_extension::Result<Value> {
     let remote_path = params
@@ -162,7 +195,15 @@ pub async fn scp_pull(
         .and_then(|v| v.as_str())
         .ok_or_else(|| omegon_extension::Error::invalid_params("missing 'local_path'"))?;
 
-    let local = validate_local_path(local_path)?;
+    validate_remote_path(remote_path, &config.allowed_remote_read_roots, "read")?;
+    let local = validate_local_path(local_path, &config.allowed_local_roots)?;
+
+    let max_bytes = params
+        .get("max_bytes")
+        .and_then(|v| v.as_u64())
+        .map(|v| v as usize)
+        .unwrap_or(config.max_output_bytes)
+        .min(config.max_output_bytes);
 
     let client_guard = client.lock().await;
     let sftp = client_guard
@@ -170,33 +211,66 @@ pub async fn scp_pull(
         .await
         .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))?;
 
-    let data = sftp
-        .read(remote_path)
+    let mut remote = sftp
+        .open(remote_path)
         .await
-        .map_err(|e| omegon_extension::Error::internal_error(format!("sftp read: {e}")))?;
-
-    tokio::fs::write(&local, &data)
+        .map_err(|e| omegon_extension::Error::internal_error(format!("sftp open: {e}")))?;
+    let mut out = tokio::fs::File::create(&local)
         .await
         .map_err(|e| omegon_extension::Error::internal_error(format!("write {local_path}: {e}")))?;
+
+    let mut remaining = max_bytes + 1;
+    let mut bytes_read = 0usize;
+    let mut buf = vec![0u8; 8192];
+    let mut truncated = false;
+    while remaining > 0 {
+        let to_read = remaining.min(buf.len());
+        let n = remote
+            .read(&mut buf[..to_read])
+            .await
+            .map_err(|e| omegon_extension::Error::internal_error(format!("sftp read: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        bytes_read += n;
+        remaining -= n;
+        let write_n = if bytes_read > max_bytes {
+            truncated = true;
+            n - (bytes_read - max_bytes)
+        } else {
+            n
+        };
+        if write_n > 0 {
+            out.write_all(&buf[..write_n]).await.map_err(|e| {
+                omegon_extension::Error::internal_error(format!("write {local_path}: {e}"))
+            })?;
+        }
+        if truncated {
+            break;
+        }
+    }
 
     Ok(json!({
         "host": client_guard.host_name(),
         "remote_path": remote_path,
         "local_path": local_path,
-        "bytes_written": data.len(),
+        "bytes_written": bytes_read.min(max_bytes),
+        "truncated": truncated,
     }))
 }
 
 /// List files at a path on a remote host.
 pub async fn sftp_ls(
     client: &Arc<Mutex<SshClient>>,
-    _config: &ShuttleConfig,
+    config: &ShuttleConfig,
     params: &Value,
 ) -> omegon_extension::Result<Value> {
     let path = params
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| omegon_extension::Error::invalid_params("missing 'path'"))?;
+
+    validate_remote_path(path, &config.allowed_remote_read_roots, "read")?;
 
     let client_guard = client.lock().await;
     let sftp = client_guard
@@ -251,17 +325,33 @@ pub async fn sftp_read(
         .await
         .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))?;
 
-    let data = sftp
-        .read(path)
+    validate_remote_path(path, &config.allowed_remote_read_roots, "read")?;
+
+    let mut remote = sftp
+        .open(path)
         .await
-        .map_err(|e| omegon_extension::Error::internal_error(format!("sftp read: {e}")))?;
+        .map_err(|e| omegon_extension::Error::internal_error(format!("sftp open: {e}")))?;
+    let mut data = Vec::with_capacity(max_bytes.min(8192));
+    let mut remaining = max_bytes + 1;
+    let mut buf = vec![0u8; 8192];
+    while remaining > 0 {
+        let to_read = remaining.min(buf.len());
+        let n = remote
+            .read(&mut buf[..to_read])
+            .await
+            .map_err(|e| omegon_extension::Error::internal_error(format!("sftp read: {e}")))?;
+        if n == 0 {
+            break;
+        }
+        data.extend_from_slice(&buf[..n]);
+        remaining -= n;
+    }
 
     let truncated = data.len() > max_bytes;
-    let content = if truncated {
-        String::from_utf8_lossy(&data[..max_bytes]).into_owned()
-    } else {
-        String::from_utf8_lossy(&data).into_owned()
-    };
+    if truncated {
+        data.truncate(max_bytes);
+    }
+    let content = String::from_utf8_lossy(&data).into_owned();
 
     Ok(json!({
         "host": client_guard.host_name(),

@@ -88,15 +88,21 @@ pub async fn ssh_script(
         .unwrap_or(config.default_timeout_secs)
         .min(3600);
 
-    // Generate a random delimiter that cannot appear in the script body.
-    let delimiter = format!(
-        "SHUTTLE_EOF_{:016x}",
-        rand_core::OsRng.next_u64()
-    );
+    // Generate a random delimiter that does not appear as a standalone
+    // line in the script body. A delimiter collision would terminate the
+    // quoted heredoc early and let trailing script bytes execute as shell.
+    let delimiter = loop {
+        let candidate = format!(
+            "SHUTTLE_EOF_{:016x}{:016x}",
+            rand_core::OsRng.next_u64(),
+            rand_core::OsRng.next_u64()
+        );
+        if !script.lines().any(|line| line == candidate) {
+            break candidate;
+        }
+    };
 
-    let wrapped = format!(
-        "{interpreter} -s <<'{delimiter}'\n{script}\n{delimiter}"
-    );
+    let wrapped = format!("{interpreter} -s <<'{delimiter}'\n{script}\n{delimiter}");
 
     let client = client.lock().await;
     let result = client

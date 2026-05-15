@@ -19,6 +19,22 @@ fn is_strict_loopback(host: &str) -> bool {
     }
 }
 
+fn normalize_tunnel_host(host: &str) -> String {
+    host.trim().trim_end_matches('.').to_ascii_lowercase()
+}
+
+fn tunnel_destination_allowed(allowed: &[String], remote_host: &str, remote_port: u16) -> bool {
+    let normalized_host = normalize_tunnel_host(remote_host);
+    allowed.iter().any(|entry| {
+        let entry = entry.trim();
+        let Some((host, port)) = entry.rsplit_once(':') else {
+            return false;
+        };
+        let allowed_host = normalize_tunnel_host(host.trim_matches(['[', ']']));
+        allowed_host == normalized_host && (port == "*" || port == remote_port.to_string())
+    })
+}
+
 /// Tracks active tunnels and their state.
 pub struct TunnelManager {
     tunnels: Arc<Mutex<HashMap<String, TunnelEntry>>>,
@@ -71,11 +87,8 @@ impl TunnelManager {
 
         // Enforce tunnel destination allowlist
         if let Some(ref allowed) = allowed_tunnel_destinations {
-            let dest = format!("{remote_host}:{remote_port}");
-            let host_allowed = allowed.iter().any(|a| {
-                *a == dest || *a == format!("{remote_host}:*")
-            });
-            if !host_allowed {
+            let dest = format!("{}:{remote_port}", normalize_tunnel_host(remote_host));
+            if !tunnel_destination_allowed(allowed, remote_host, remote_port) {
                 return Err(omegon_extension::Error::invalid_params(format!(
                     "tunnel destination {dest} not in allowed_tunnel_destinations"
                 )));
@@ -177,9 +190,9 @@ impl TunnelManager {
     /// Close a tunnel by ID.
     pub async fn close(&self, tunnel_id: &str) -> omegon_extension::Result<Value> {
         let mut tunnels = self.tunnels.lock().await;
-        let entry = tunnels
-            .remove(tunnel_id)
-            .ok_or_else(|| omegon_extension::Error::invalid_params(format!("tunnel not found: {tunnel_id}")))?;
+        let entry = tunnels.remove(tunnel_id).ok_or_else(|| {
+            omegon_extension::Error::invalid_params(format!("tunnel not found: {tunnel_id}"))
+        })?;
 
         let _ = entry.cancel.send(true);
 

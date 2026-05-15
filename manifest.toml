@@ -40,7 +40,31 @@ default = "1048576"
 [config.allowed_hosts]
 type = "string"
 label = "Allowed hosts"
-description = "Comma-separated host names the agent may connect to. Empty means all configured hosts."
+description = "Comma-separated host names the agent may connect to. Required unless allow_all_hosts is true."
+required = false
+
+[config.allow_all_hosts]
+type = "boolean"
+label = "Allow all hosts"
+description = "Explicit escape hatch allowing access to every host in hosts.toml when allowed_hosts is unset. Prefer allowed_hosts for least privilege."
+default = "false"
+
+[config.allowed_local_roots]
+type = "string"
+label = "Allowed local roots"
+description = "Comma-separated local directory roots that scp_push/scp_pull may read/write. Defaults to the extension working directory."
+required = false
+
+[config.allowed_remote_read_roots]
+type = "string"
+label = "Allowed remote read roots"
+description = "Comma-separated remote path prefixes allowed for sftp_ls, sftp_read, and scp_pull. Empty preserves legacy unrestricted remote reads."
+required = false
+
+[config.allowed_remote_write_roots]
+type = "string"
+label = "Allowed remote write roots"
+description = "Comma-separated remote path prefixes allowed for scp_push. Empty preserves legacy unrestricted remote writes."
 required = false
 
 [config.connection_pool_size]

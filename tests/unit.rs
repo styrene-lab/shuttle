@@ -63,10 +63,7 @@ mod config_tests {
     fn config_clamps_timeout() {
         let mut config = shuttle::config::ShuttleConfig::default();
         let mut rpc = HashMap::new();
-        rpc.insert(
-            "default_timeout_secs".to_string(),
-            json!(999999),
-        );
+        rpc.insert("default_timeout_secs".to_string(), json!(999999));
         config.apply_rpc_config(&rpc);
         assert_eq!(config.default_timeout_secs, 3600);
     }
@@ -97,10 +94,7 @@ mod config_tests {
         let mut rpc = HashMap::new();
         rpc.insert("allowed_hosts".to_string(), json!("a,b,c"));
         config.apply_rpc_config(&rpc);
-        assert_eq!(
-            config.allowed_hosts.as_ref().unwrap(),
-            &["a", "b", "c"]
-        );
+        assert_eq!(config.allowed_hosts.as_ref().unwrap(), &["a", "b", "c"]);
 
         // Second set: [b, d] — intersection should be [b]
         let mut rpc2 = HashMap::new();
@@ -133,6 +127,48 @@ mod config_tests {
 
         let result = config.resolve_host("not-allowed");
         assert!(result.is_err());
+    }
+    #[test]
+    fn host_resolve_requires_allowlist_or_explicit_allow_all() {
+        let config = shuttle::config::ShuttleConfig::default();
+        let result = config.resolve_host("prod");
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("allowed_hosts is required"));
+    }
+
+    #[test]
+    fn allow_all_hosts_is_explicit_escape_hatch() {
+        let mut config = shuttle::config::ShuttleConfig::default();
+        let mut rpc = HashMap::new();
+        rpc.insert("allow_all_hosts".to_string(), json!(true));
+        config.apply_rpc_config(&rpc);
+        assert!(config.allow_all_hosts);
+    }
+
+    #[test]
+    fn remote_roots_parse_from_rpc_config() {
+        let mut config = shuttle::config::ShuttleConfig::default();
+        let mut rpc = HashMap::new();
+        rpc.insert(
+            "allowed_remote_read_roots".to_string(),
+            json!("/var/log/,/srv/app"),
+        );
+        rpc.insert(
+            "allowed_remote_write_roots".to_string(),
+            json!("/tmp/shuttle"),
+        );
+        config.apply_rpc_config(&rpc);
+        assert_eq!(
+            config.allowed_remote_read_roots.unwrap(),
+            vec!["/var/log", "/srv/app"]
+        );
+        assert_eq!(
+            config.allowed_remote_write_roots.unwrap(),
+            vec!["/tmp/shuttle"]
+        );
     }
 }
 
@@ -194,18 +230,21 @@ mod tool_tests {
     fn all_tools_have_required_fields() {
         for tool in shuttle::tools::tool_definitions() {
             assert!(tool.get("name").is_some(), "tool missing 'name'");
-            assert!(tool.get("description").is_some(), "tool missing 'description'");
-            assert!(tool.get("parameters").is_some(), "tool missing 'parameters'");
+            assert!(
+                tool.get("description").is_some(),
+                "tool missing 'description'"
+            );
+            assert!(
+                tool.get("parameters").is_some(),
+                "tool missing 'parameters'"
+            );
         }
     }
 
     #[test]
     fn tool_names_are_unique() {
         let tools = shuttle::tools::tool_definitions();
-        let names: Vec<&str> = tools
-            .iter()
-            .map(|t| t["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         let mut deduped = names.clone();
         deduped.sort();
         deduped.dedup();
@@ -215,8 +254,14 @@ mod tool_tests {
     #[test]
     fn host_requiring_tools_have_host_parameter() {
         let needs_host = [
-            "ssh_exec", "ssh_script", "scp_push", "scp_pull",
-            "sftp_ls", "sftp_read", "ssh_tunnel_open", "ssh_ping",
+            "ssh_exec",
+            "ssh_script",
+            "scp_push",
+            "scp_pull",
+            "sftp_ls",
+            "sftp_read",
+            "ssh_tunnel_open",
+            "ssh_ping",
         ];
         let tools = shuttle::tools::tool_definitions();
         for tool in &tools {
@@ -247,14 +292,17 @@ mod exec_tests {
             "",
         ];
         let allowed = [
-            "/bin/bash", "/bin/sh", "/usr/bin/bash", "/usr/bin/sh",
-            "/usr/bin/python3", "/usr/bin/python", "/usr/bin/perl", "/usr/bin/ruby",
+            "/bin/bash",
+            "/bin/sh",
+            "/usr/bin/bash",
+            "/usr/bin/sh",
+            "/usr/bin/python3",
+            "/usr/bin/python",
+            "/usr/bin/perl",
+            "/usr/bin/ruby",
         ];
         for bad in &bad_interpreters {
-            assert!(
-                !allowed.contains(bad),
-                "{bad} should not be in allowlist"
-            );
+            assert!(!allowed.contains(bad), "{bad} should not be in allowlist");
         }
     }
 }

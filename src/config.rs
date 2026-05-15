@@ -27,7 +27,11 @@ pub struct ShuttleConfig {
     pub default_timeout_secs: u64,
     pub max_output_bytes: usize,
     pub allowed_hosts: Option<Vec<String>>,
+    pub allow_all_hosts: bool,
     pub allowed_tunnel_destinations: Option<Vec<String>>,
+    pub allowed_local_roots: Option<Vec<PathBuf>>,
+    pub allowed_remote_read_roots: Option<Vec<String>>,
+    pub allowed_remote_write_roots: Option<Vec<String>>,
     pub connection_pool_size: usize,
     hosts: HashMap<String, HostEntry>,
     /// Once true, hosts_file and known_hosts_file cannot be changed via RPC.
@@ -46,7 +50,11 @@ impl Default for ShuttleConfig {
             default_timeout_secs: 30,
             max_output_bytes: 1_048_576,
             allowed_hosts: None,
+            allow_all_hosts: false,
             allowed_tunnel_destinations: None,
+            allowed_local_roots: std::env::current_dir().ok().map(|p| vec![p]),
+            allowed_remote_read_roots: None,
+            allowed_remote_write_roots: None,
             connection_pool_size: 4,
             hosts: HashMap::new(),
             paths_locked: false,
@@ -76,6 +84,8 @@ impl ShuttleConfig {
             if !allowed.iter().any(|a| a == name) {
                 return Err(ConfigError::HostNotAllowed(name.to_string()));
             }
+        } else if !self.allow_all_hosts {
+            return Err(ConfigError::HostAllowlistRequired(name.to_string()));
         }
         self.hosts
             .get(name)
@@ -107,6 +117,38 @@ impl ShuttleConfig {
         }
         if let Some(v) = config.get("connection_pool_size").and_then(|v| v.as_u64()) {
             self.connection_pool_size = (v as usize).clamp(1, 32);
+        }
+        if let Some(v) = config.get("allow_all_hosts").and_then(|v| v.as_bool()) {
+            self.allow_all_hosts = v;
+        }
+        if let Some(v) = config.get("allowed_local_roots").and_then(|v| v.as_str()) {
+            let roots: Vec<PathBuf> = v
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .filter_map(|s| expand_tilde(s).canonicalize().ok())
+                .collect();
+            if !roots.is_empty() {
+                self.allowed_local_roots = Some(roots);
+            }
+        }
+        if let Some(v) = config
+            .get("allowed_remote_read_roots")
+            .and_then(|v| v.as_str())
+        {
+            let roots = parse_csv_strings(v);
+            if !roots.is_empty() {
+                self.allowed_remote_read_roots = Some(roots);
+            }
+        }
+        if let Some(v) = config
+            .get("allowed_remote_write_roots")
+            .and_then(|v| v.as_str())
+        {
+            let roots = parse_csv_strings(v);
+            if !roots.is_empty() {
+                self.allowed_remote_write_roots = Some(roots);
+            }
         }
         if let Some(v) = config.get("allowed_hosts").and_then(|v| v.as_str()) {
             let new_hosts: Vec<String> = v
@@ -148,25 +190,30 @@ impl ShuttleConfig {
             if !new_dests.is_empty() {
                 // Same intersection-tightening as allowed_hosts — can only
                 // narrow the set, never widen it after initial configuration.
-                self.allowed_tunnel_destinations =
-                    match self.allowed_tunnel_destinations.take() {
-                        Some(existing) => {
-                            let intersection: Vec<String> = existing
-                                .into_iter()
-                                .filter(|d| new_dests.contains(d))
-                                .collect();
-                            if intersection.is_empty() {
-                                tracing::warn!(
-                                    "allowed_tunnel_destinations intersection is empty"
-                                );
-                            }
-                            Some(intersection)
+                self.allowed_tunnel_destinations = match self.allowed_tunnel_destinations.take() {
+                    Some(existing) => {
+                        let intersection: Vec<String> = existing
+                            .into_iter()
+                            .filter(|d| new_dests.contains(d))
+                            .collect();
+                        if intersection.is_empty() {
+                            tracing::warn!("allowed_tunnel_destinations intersection is empty");
                         }
-                        None => Some(new_dests),
-                    };
+                        Some(intersection)
+                    }
+                    None => Some(new_dests),
+                };
             }
         }
     }
+}
+
+fn parse_csv_strings(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|s| s.trim().trim_end_matches('/').to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
 }
 
 fn expand_tilde(path: &str) -> PathBuf {
@@ -186,6 +233,8 @@ pub enum ConfigError {
     HostNotFound(String),
     #[error("host not in allowlist: {0}")]
     HostNotAllowed(String),
+    #[error("allowed_hosts is required unless allow_all_hosts=true: {0}")]
+    HostAllowlistRequired(String),
     #[error("failed to read {0}: {1}")]
     Io(String, std::io::Error),
     #[error("failed to parse {0}: {1}")]

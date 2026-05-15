@@ -90,8 +90,7 @@ impl ShuttleExtension {
             std::env::remove_var("STYRENE_PASSPHRASE");
         }
 
-        let provider =
-            styrene_identity::file_signer::StaticPassphraseProvider::new(&passphrase);
+        let provider = styrene_identity::file_signer::StaticPassphraseProvider::new(&passphrase);
         passphrase.zeroize();
 
         let signer =
@@ -115,10 +114,9 @@ impl ShuttleExtension {
         self.ensure_signer().await?;
         let signer_guard = self.signer.read().await;
         let signer = signer_guard.as_ref().unwrap();
-        let root = signer
-            .root_secret()
-            .await
-            .map_err(|e| omegon_extension::Error::internal_error(format!("unlock identity: {e}")))?;
+        let root = signer.root_secret().await.map_err(|e| {
+            omegon_extension::Error::internal_error(format!("unlock identity: {e}"))
+        })?;
 
         let mut cache = self.root_cache.write().await;
         cache.set(&root);
@@ -140,7 +138,9 @@ impl ShuttleExtension {
             "ssh_hosts" => self.tool_ssh_hosts(params).await,
             "ssh_ping" => self.tool_ssh_ping(params).await,
             "ssh_migrate_analyze" => self.tool_migrate_analyze(params).await,
-            _ => Err(omegon_extension::Error::method_not_found(&format!("tool '{name}'"))),
+            _ => Err(omegon_extension::Error::method_not_found(&format!(
+                "tool '{name}'"
+            ))),
         }
     }
 
@@ -168,10 +168,12 @@ impl ShuttleExtension {
     async fn tool_ssh_exec(&self, params: Value) -> omegon_extension::Result<Value> {
         let host = Self::extract_host(&params)?;
         let command = params.get("command").and_then(|v| v.as_str()).unwrap_or("");
+        let command_hash = format!("{:016x}", fxhash(command.as_bytes()));
         tracing::info!(
             tool = "ssh_exec",
             host,
-            command,
+            command_hash,
+            command_len = command.len(),
             "executing remote command"
         );
         let client = self.acquire_client(host).await?;
@@ -182,7 +184,10 @@ impl ShuttleExtension {
                 tool = "ssh_exec",
                 host,
                 exit_code = v.get("exit_code").and_then(|v| v.as_u64()).unwrap_or(255),
-                truncated = v.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false),
+                truncated = v
+                    .get("truncated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 "command completed"
             );
         }
@@ -221,9 +226,21 @@ impl ShuttleExtension {
 
     async fn tool_scp_push(&self, params: Value) -> omegon_extension::Result<Value> {
         let host = Self::extract_host(&params)?;
-        let local = params.get("local_path").and_then(|v| v.as_str()).unwrap_or("");
-        let remote = params.get("remote_path").and_then(|v| v.as_str()).unwrap_or("");
-        tracing::info!(tool = "scp_push", host, local, remote, "uploading file");
+        let local = params
+            .get("local_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let remote = params
+            .get("remote_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        tracing::info!(
+            tool = "scp_push",
+            host,
+            local_hash = format!("{:016x}", fxhash(local.as_bytes())),
+            remote_hash = format!("{:016x}", fxhash(remote.as_bytes())),
+            "uploading file"
+        );
         let client = self.acquire_client(host).await?;
         let config = self.config.read().await;
         let result = crate::transfer::scp_push(&client, &config, &params).await;
@@ -240,9 +257,21 @@ impl ShuttleExtension {
 
     async fn tool_scp_pull(&self, params: Value) -> omegon_extension::Result<Value> {
         let host = Self::extract_host(&params)?;
-        let remote = params.get("remote_path").and_then(|v| v.as_str()).unwrap_or("");
-        let local = params.get("local_path").and_then(|v| v.as_str()).unwrap_or("");
-        tracing::info!(tool = "scp_pull", host, remote, local, "downloading file");
+        let remote = params
+            .get("remote_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let local = params
+            .get("local_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        tracing::info!(
+            tool = "scp_pull",
+            host,
+            remote_hash = format!("{:016x}", fxhash(remote.as_bytes())),
+            local_hash = format!("{:016x}", fxhash(local.as_bytes())),
+            "downloading file"
+        );
         let client = self.acquire_client(host).await?;
         let config = self.config.read().await;
         crate::transfer::scp_pull(&client, &config, &params).await
@@ -251,7 +280,12 @@ impl ShuttleExtension {
     async fn tool_sftp_ls(&self, params: Value) -> omegon_extension::Result<Value> {
         let host = Self::extract_host(&params)?;
         let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        tracing::info!(tool = "sftp_ls", host, path, "listing remote directory");
+        tracing::info!(
+            tool = "sftp_ls",
+            host,
+            path_hash = format!("{:016x}", fxhash(path.as_bytes())),
+            "listing remote directory"
+        );
         let client = self.acquire_client(host).await?;
         let config = self.config.read().await;
         crate::transfer::sftp_ls(&client, &config, &params).await
@@ -260,7 +294,12 @@ impl ShuttleExtension {
     async fn tool_sftp_read(&self, params: Value) -> omegon_extension::Result<Value> {
         let host = Self::extract_host(&params)?;
         let path = params.get("path").and_then(|v| v.as_str()).unwrap_or("");
-        tracing::info!(tool = "sftp_read", host, path, "reading remote file");
+        tracing::info!(
+            tool = "sftp_read",
+            host,
+            path_hash = format!("{:016x}", fxhash(path.as_bytes())),
+            "reading remote file"
+        );
         let client = self.acquire_client(host).await?;
         let config = self.config.read().await;
         let result = crate::transfer::sftp_read(&client, &config, &params).await;
@@ -269,7 +308,10 @@ impl ShuttleExtension {
                 tool = "sftp_read",
                 host,
                 size = v.get("size").and_then(|v| v.as_u64()).unwrap_or(0),
-                truncated = v.get("truncated").and_then(|v| v.as_bool()).unwrap_or(false),
+                truncated = v
+                    .get("truncated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
                 "read complete"
             );
         }
@@ -283,9 +325,9 @@ impl ShuttleExtension {
             .and_then(|v| v.as_u64())
             .ok_or_else(|| omegon_extension::Error::invalid_params("missing 'local_port'"))?;
         if local_port_raw > 65535 {
-            return Err(omegon_extension::Error::invalid_params(
-                format!("local_port must be 0-65535 (got {local_port_raw})")
-            ));
+            return Err(omegon_extension::Error::invalid_params(format!(
+                "local_port must be 0-65535 (got {local_port_raw})"
+            )));
         }
         let local_port = local_port_raw as u16;
         let remote_host = params
@@ -297,9 +339,9 @@ impl ShuttleExtension {
             .and_then(|v| v.as_u64())
             .ok_or_else(|| omegon_extension::Error::invalid_params("missing 'remote_port'"))?;
         if remote_port_raw > 65535 {
-            return Err(omegon_extension::Error::invalid_params(
-                format!("remote_port must be 0-65535 (got {remote_port_raw})")
-            ));
+            return Err(omegon_extension::Error::invalid_params(format!(
+                "remote_port must be 0-65535 (got {remote_port_raw})"
+            )));
         }
         let remote_port = remote_port_raw as u16;
 
@@ -339,7 +381,10 @@ impl ShuttleExtension {
     }
 
     async fn tool_migrate_analyze(&self, params: Value) -> omegon_extension::Result<Value> {
-        tracing::info!(tool = "ssh_migrate_analyze", "scanning ~/.ssh for migration");
+        tracing::info!(
+            tool = "ssh_migrate_analyze",
+            "scanning ~/.ssh for migration"
+        );
         crate::migrate::ssh_migrate_analyze(&params).await
     }
 
@@ -369,7 +414,12 @@ impl ShuttleExtension {
         match self.acquire_client(host).await {
             Ok(_client) => {
                 let elapsed = start.elapsed();
-                tracing::info!(tool = "ssh_ping", host, latency_ms = elapsed.as_millis(), "reachable");
+                tracing::info!(
+                    tool = "ssh_ping",
+                    host,
+                    latency_ms = elapsed.as_millis(),
+                    "reachable"
+                );
                 Ok(json!({
                     "host": host,
                     "reachable": true,
@@ -408,11 +458,7 @@ impl omegon_extension::Extension for ShuttleExtension {
         env!("CARGO_PKG_VERSION")
     }
 
-    async fn handle_rpc(
-        &self,
-        method: &str,
-        params: Value,
-    ) -> omegon_extension::Result<Value> {
+    async fn handle_rpc(&self, method: &str, params: Value) -> omegon_extension::Result<Value> {
         match method {
             "initialize" => {
                 let tools = tools::tool_definitions();
@@ -440,10 +486,7 @@ impl omegon_extension::Extension for ShuttleExtension {
             }
 
             "execute_tool" | "tools/call" => {
-                let name = params
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let args = params.get("arguments").cloned().unwrap_or(json!({}));
                 self.execute_tool(name, args).await
             }
@@ -466,10 +509,13 @@ impl omegon_extension::Extension for ShuttleExtension {
                 cfg.hosts_file.display()
             );
 
-            if cfg.allowed_hosts.is_none() {
+            if cfg.allowed_hosts.is_none() && !cfg.allow_all_hosts {
+                tracing::error!(
+                    "allowed_hosts is not configured and allow_all_hosts is false — no hosts are accessible. Set allowed_hosts or explicitly set allow_all_hosts=true."
+                );
+            } else if cfg.allowed_hosts.is_none() {
                 tracing::warn!(
-                    "allowed_hosts is not configured — all {} hosts in hosts.toml are \
-                     accessible. Set allowed_hosts to restrict agent access.",
+                    "allow_all_hosts=true — all {} hosts in hosts.toml are accessible. Prefer allowed_hosts for least privilege.",
                     host_count
                 );
             }
