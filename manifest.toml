@@ -1,6 +1,6 @@
 [extension]
 name = "shuttle"
-version = "0.1.0"
+version = "0.2.0"
 description = "Security-hardened controlled preview of Omegon SSH remote operations — bounded execution, transfer, and tunnels with Styrene identity."
 sdk_version = "0.25"
 

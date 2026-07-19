@@ -26,6 +26,35 @@
 - Added bounded connection pooling, transfer limits, exact tunnel destination authorization, remote-path validation, and structured tool tracing.
 - Added transactional endpoint-binding registry replacement so rejected refreshes cannot partially revoke active leases.
 
+## [0.2.0] - 2026-07-19
+
+### Release maturity
+
+- Published as a **Security-Hardened Controlled Preview** through Armory.
+- This release is suitable for operator-approved remote-machine workflows while the endpoint-binding and stable error-contract GA gates remain open.
+
+### Added
+
+- Explicit authentication profiles with exact selection and no credential fallback.
+- Bounded SSH connection pooling isolated by endpoint, user, authentication profile, and ephemeral binding context.
+- Ephemeral endpoint bindings with strict host-key pins, bounded lifetime, atomic replacement, and revocation propagation through pooled sessions, SSH channels, active tunnels, and SFTP operations.
+- Dedicated connection and transfer limits, structured tracing, remote path validation, exact tunnel destination authorization, and migration analysis hardening.
+- Mandatory disposable-sshd integration gates for CI and release workflows.
+- Operator-facing `README.md`, GA roadmap, authentication documentation, and transport/identity architecture guidance.
+
+### Changed
+
+- Removed deployment-specific host and password defaults from the generic extension manifest.
+- Empty host policy now fails closed unless `allow_all_hosts` is explicitly enabled.
+- OpenSSH wildcard, negated, and multi-alias host patterns are reported but excluded from generated Shuttle migration records.
+
+### Security
+
+- Ephemeral endpoints never consult or mutate permanent known-host state and cannot use TOFU.
+- Failed endpoint-binding registry refreshes are transactional and cannot partially revoke active leases.
+- Bound tunnel forwarding and chunked SFTP operations observe binding expiry and revocation during operation.
+- Local uploads are restricted to configured roots and all transfer sizes are bounded.
+
 ## [0.1.0] - 2026-05-15
 
 ### Added

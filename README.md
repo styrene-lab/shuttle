@@ -139,8 +139,10 @@ Prefer narrow policy values. Empty remote-root lists preserve unrestricted legac
 
 ```bash
 cargo fmt --check
-cargo test --all-targets
+cargo test --lib --bins --test unit -- --test-threads=1
+cargo test --doc
 cargo clippy --all-targets -- -D warnings
+./test-infra/run.sh
 ```
 
 Live SSH tests use the infrastructure under `test-infra/`. Mandatory live integration CI is a 1.0 GA exit criterion; see [ROADMAP.md](ROADMAP.md).
