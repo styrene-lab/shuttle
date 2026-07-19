@@ -24,11 +24,13 @@ pub struct ConnectionTarget {
     pub address: String,
     pub port: u16,
     pub verifier: HostVerifier,
+    pub valid_until: Option<std::time::SystemTime>,
 }
 
 pub struct SshClient {
     handle: client::Handle<ShuttleHandler>,
     host_name: String,
+    valid_until: Option<std::time::SystemTime>,
 }
 
 impl SshClient {
@@ -48,6 +50,7 @@ impl SshClient {
                 known_hosts_path: known_hosts_path.to_path_buf(),
                 tofu: entry.trust_on_first_use,
             },
+            valid_until: None,
         };
         Self::connect_target(host_name, entry, profile, root, password, target).await
     }
@@ -61,6 +64,7 @@ impl SshClient {
         target: ConnectionTarget,
     ) -> Result<Self, ClientError> {
         let addr = format!("{}:{}", target.address, target.port);
+        Self::ensure_valid_until(target.valid_until)?;
         let socket_addr = addr
             .to_socket_addrs()
             .map_err(|e| ClientError::Resolve(addr.clone(), e))?
@@ -109,13 +113,26 @@ impl SshClient {
                 "server rejected selected authentication profile".to_string(),
             ));
         }
+        Self::ensure_valid_until(target.valid_until)?;
 
         tracing::info!(host = host_name, user = %entry.user, "authenticated");
 
         Ok(Self {
             handle,
             host_name: host_name.to_string(),
+            valid_until: target.valid_until,
         })
+    }
+
+    fn ensure_valid_until(valid_until: Option<std::time::SystemTime>) -> Result<(), ClientError> {
+        if valid_until.is_some_and(|expiry| expiry <= std::time::SystemTime::now()) {
+            return Err(ClientError::Binding("endpoint binding expired".to_string()));
+        }
+        Ok(())
+    }
+
+    fn ensure_valid(&self) -> Result<(), ClientError> {
+        Self::ensure_valid_until(self.valid_until)
     }
 
     pub async fn exec(
@@ -124,6 +141,7 @@ impl SshClient {
         timeout: std::time::Duration,
         max_output: usize,
     ) -> Result<ExecResult, ClientError> {
+        self.ensure_valid()?;
         let mut channel = self
             .handle
             .channel_open_session()
@@ -203,6 +221,7 @@ impl SshClient {
     }
 
     pub async fn sftp(&self) -> Result<russh_sftp::client::SftpSession, ClientError> {
+        self.ensure_valid()?;
         let channel = self
             .handle
             .channel_open_session()
@@ -228,6 +247,7 @@ impl SshClient {
         local_host: &str,
         local_port: u32,
     ) -> Result<russh::Channel<client::Msg>, ClientError> {
+        self.ensure_valid()?;
         self.handle
             .channel_open_direct_tcpip(remote_host, remote_port, local_host, local_port)
             .await

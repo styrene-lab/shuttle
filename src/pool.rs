@@ -119,6 +119,7 @@ impl ConnectionPool {
                             logical_host: host_name.to_string(),
                             pin: binding.host_key_pin.clone(),
                         },
+                        valid_until: Some(binding.expires_at()),
                     };
                     SshClient::connect_target(host_name, entry, &profile, root, password, target)
                         .await
@@ -136,25 +137,29 @@ impl ConnectionPool {
                 }
             }
         };
+        let connect_timeout = match expires_at {
+            Some(expiry) => expiry
+                .duration_since(std::time::SystemTime::now())
+                .map_err(|_| ClientError::Binding("endpoint binding expired".to_string()))?
+                .min(std::time::Duration::from_secs(config.connect_timeout_secs)),
+            None => std::time::Duration::from_secs(config.connect_timeout_secs),
+        };
         let client = Arc::new(Mutex::new(
-            tokio::time::timeout(
-                std::time::Duration::from_secs(config.connect_timeout_secs),
-                connect,
-            )
-            .await
-            .map_err(|_| {
-                ClientError::Timeout(
-                    format!("{host_name} (connect)"),
-                    std::time::Duration::from_secs(config.connect_timeout_secs),
-                )
-            })??,
+            tokio::time::timeout(connect_timeout, connect)
+                .await
+                .map_err(|_| {
+                    ClientError::Timeout(format!("{host_name} (connect)"), connect_timeout)
+                })??,
         ));
 
         let mut entries = self.entries.lock().await;
         // Another caller may have connected concurrently. Prefer the already
         // published live session and let this redundant session drop.
         if let Some(existing) = entries.get_mut(&key) {
-            if !existing.client.lock().await.is_closed() {
+            let expired = existing
+                .expires_at
+                .is_some_and(|expires_at| expires_at <= std::time::SystemTime::now());
+            if !expired && !existing.client.lock().await.is_closed() {
                 existing.last_used = Instant::now();
                 return Ok(existing.client.clone());
             }
