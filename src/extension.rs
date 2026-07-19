@@ -171,6 +171,19 @@ impl ShuttleExtension {
         }
     }
 
+    fn rpc_tool_args(params: &Value) -> Value {
+        params
+            .get("arguments")
+            .or_else(|| params.get("args"))
+            .cloned()
+            .unwrap_or(json!({}))
+    }
+
+    #[doc(hidden)]
+    pub fn rpc_tool_args_for_test(params: &Value) -> Value {
+        Self::rpc_tool_args(params)
+    }
+
     async fn acquire_client(
         &self,
         host_name: &str,
@@ -580,11 +593,7 @@ impl omegon_extension::Extension for ShuttleExtension {
 
             "execute_tool" | "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let args = params
-                    .get("arguments")
-                    .or_else(|| params.get("args"))
-                    .cloned()
-                    .unwrap_or(json!({}));
+                let args = Self::rpc_tool_args(&params);
                 self.execute_tool(name, args).await
             }
 

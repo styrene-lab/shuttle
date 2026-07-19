@@ -75,6 +75,41 @@ Password profiles use the same host-key verification path as public-key profiles
 
 The design must work without the local OpenSSH client, `ssh-agent`, or `~/.ssh/config`. Interactive Omegon, deployed daemon Omegon, and one-shot jobs all receive credentials through the same harness bootstrap protocol and use the same pure-Rust SSH path.
 
+## Validation matrix
+
+Validated against TrueNAS 24.10.2.4 using a named `password` profile and the
+Omegon 0.25 extension contract:
+
+| Capability | Result |
+| --- | --- |
+| Extension startup and secret bootstrap | Pass |
+| `args` and `arguments` RPC envelopes | Pass; covered by regression tests |
+| Host allowlist and pinned host-key verification | Pass |
+| `ssh_hosts` / `ssh_ping` | Pass |
+| `ssh_exec` / `ssh_script` | Pass |
+| `sftp_ls` / `sftp_read` | Pass |
+| `scp_push` / `scp_pull` | Pass; byte-for-byte round trip verified |
+| Tunnel open / list / close | Pass on an allowed loopback destination |
+| Local path policy | Pass; `/tmp` was rejected when outside `allowed_local_roots` |
+| Tunnel port policy | Pass; ephemeral port `0` was rejected because local ports must be at least 1024 |
+
+The live tests used temporary probe files only and removed the remote probe.
+They did not alter persistent remote configuration.
+
+## Operational notes
+
+- The native extension launcher expects the manifest binary (`shuttle`) to
+  resolve to the current release build. Development installs may use a symlink
+  to `target/release/shuttle`; packaged installs should ship the binary itself.
+- Shuttle's compact fingerprint file format is `<host-alias> <base64-digest>`.
+  It intentionally does not use OpenSSH's `known_hosts` line format.
+- Transfer paths and tunnel destinations are policy-controlled independently
+  from the remote account's privileges. An administrative remote account does
+  not bypass Shuttle's local transport restrictions.
+- `ssh_ping` opens and authenticates a fresh connection; the current pool does
+  not reuse sessions. This is correct but means observed latency includes the
+  SSH handshake and authentication.
+
 ## Compatibility and evolution
 
 The first implementation supports `public_key` and `password`. The profile model can later add keyboard-interactive, SSH certificates, hardware signers, or imported OpenSSH identities without changing tool schemas or introducing implicit fallback.

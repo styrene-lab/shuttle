@@ -141,7 +141,7 @@ pub async fn ssh_migrate_analyze(_params: &Value) -> omegon_extension::Result<Va
             .as_deref()
             .and_then(|f| Path::new(f).file_name())
             .and_then(|n| n.to_str())
-            .map(|f| suggest_label(f, &[entry.host_alias.clone()]))
+            .map(|f| suggest_label(f, std::slice::from_ref(&entry.host_alias)))
             .unwrap_or_else(|| "default".to_string());
 
         hosts_toml_lines.push(format!("[{alias}]"));

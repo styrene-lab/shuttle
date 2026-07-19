@@ -328,6 +328,35 @@ identity_label = "managed"
     }
 }
 
+mod rpc_contract_tests {
+    use serde_json::json;
+
+    #[test]
+    fn accepts_current_args_and_legacy_arguments_envelopes() {
+        let current = shuttle::extension::ShuttleExtension::rpc_tool_args_for_test(&json!({
+            "name": "ssh_ping",
+            "args": {"host": "truenas", "auth": "bootstrap"}
+        }));
+        assert_eq!(current["host"], "truenas");
+        assert_eq!(current["auth"], "bootstrap");
+
+        let legacy = shuttle::extension::ShuttleExtension::rpc_tool_args_for_test(&json!({
+            "name": "ssh_ping",
+            "arguments": {"host": "legacy"}
+        }));
+        assert_eq!(legacy["host"], "legacy");
+    }
+
+    #[test]
+    fn arguments_wins_if_both_envelopes_are_present() {
+        let args = shuttle::extension::ShuttleExtension::rpc_tool_args_for_test(&json!({
+            "arguments": {"host": "canonical"},
+            "args": {"host": "compatibility"}
+        }));
+        assert_eq!(args["host"], "canonical");
+    }
+}
+
 mod tool_tests {
     #[test]
     fn tool_definitions_has_expected_count() {
