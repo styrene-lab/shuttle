@@ -1,4 +1,5 @@
 use crate::auth;
+use crate::binding::HostKeyPin;
 use crate::config::{AuthProfile, HostEntry};
 use russh::client;
 use russh_keys::key::PublicKey;
@@ -6,6 +7,24 @@ use std::net::ToSocketAddrs;
 use std::path::Path;
 use std::sync::Arc;
 use styrene_identity::signer::RootSecret;
+
+pub enum HostVerifier {
+    ConfiguredKnownHost {
+        logical_host: String,
+        known_hosts_path: std::path::PathBuf,
+        tofu: bool,
+    },
+    EphemeralPinnedKey {
+        logical_host: String,
+        pin: HostKeyPin,
+    },
+}
+
+pub struct ConnectionTarget {
+    pub address: String,
+    pub port: u16,
+    pub verifier: HostVerifier,
+}
 
 pub struct SshClient {
     handle: client::Handle<ShuttleHandler>,
@@ -21,7 +40,27 @@ impl SshClient {
         password: Option<String>,
         known_hosts_path: &Path,
     ) -> Result<Self, ClientError> {
-        let addr = format!("{}:{}", entry.address, entry.port);
+        let target = ConnectionTarget {
+            address: entry.address.clone(),
+            port: entry.port,
+            verifier: HostVerifier::ConfiguredKnownHost {
+                logical_host: host_name.to_string(),
+                known_hosts_path: known_hosts_path.to_path_buf(),
+                tofu: entry.trust_on_first_use,
+            },
+        };
+        Self::connect_target(host_name, entry, profile, root, password, target).await
+    }
+
+    pub async fn connect_target(
+        host_name: &str,
+        entry: &HostEntry,
+        profile: &AuthProfile,
+        root: Option<&RootSecret>,
+        password: Option<String>,
+        target: ConnectionTarget,
+    ) -> Result<Self, ClientError> {
+        let addr = format!("{}:{}", target.address, target.port);
         let socket_addr = addr
             .to_socket_addrs()
             .map_err(|e| ClientError::Resolve(addr.clone(), e))?
@@ -34,11 +73,9 @@ impl SshClient {
             ..Default::default()
         });
 
-        let handler = ShuttleHandler::new(
-            host_name.to_string(),
-            known_hosts_path.to_path_buf(),
-            entry.trust_on_first_use,
-        );
+        let handler = ShuttleHandler {
+            verifier: target.verifier,
+        };
 
         let mut handle = client::connect(config, socket_addr, handler)
             .await
@@ -215,19 +252,7 @@ pub struct ExecResult {
 }
 
 struct ShuttleHandler {
-    host_name: String,
-    known_hosts_path: std::path::PathBuf,
-    tofu: bool,
-}
-
-impl ShuttleHandler {
-    fn new(host_name: String, known_hosts_path: std::path::PathBuf, tofu: bool) -> Self {
-        Self {
-            host_name,
-            known_hosts_path,
-            tofu,
-        }
-    }
+    verifier: HostVerifier,
 }
 
 #[async_trait::async_trait]
@@ -238,45 +263,36 @@ impl client::Handler for ShuttleHandler {
         &mut self,
         server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
-        let fp = server_public_key.fingerprint();
-        let fp_str = fp.to_string();
-        tracing::debug!(host = %self.host_name, fingerprint = %fp_str, "checking server key");
-
-        match check_known_host(&self.known_hosts_path, &self.host_name, &fp_str) {
-            KnownHostResult::Match => Ok(true),
-            KnownHostResult::Mismatch => {
-                tracing::error!(
-                    host = %self.host_name,
-                    "HOST KEY MISMATCH — possible MITM attack"
-                );
-                Ok(false)
+        let fp_str = server_public_key.fingerprint().to_string();
+        match &self.verifier {
+            HostVerifier::EphemeralPinnedKey { logical_host, pin } => {
+                let expected = pin.canonical_fingerprint().map_err(|_| russh::Error::UnknownKey)?;
+                let key_algorithm = server_public_key.name();
+                let matched = key_algorithm == pin.key_algorithm && fp_str == expected;
+                if !matched {
+                    tracing::error!(host = %logical_host, "ephemeral host-key pin mismatch");
+                }
+                Ok(matched)
             }
-            KnownHostResult::Unknown => {
-                if self.tofu {
-                    tracing::warn!(
-                        host = %self.host_name,
-                        fingerprint = %fp_str,
-                        "trust-on-first-use: recording new host key"
-                    );
-                    if let Err(e) =
-                        record_host_key(&self.known_hosts_path, &self.host_name, &fp_str)
-                    {
-                        tracing::error!(
-                            host = %self.host_name,
-                            error = %e,
-                            "failed to persist host key — rejecting to prevent \
-                             silent TOFU bypass on next connection"
-                        );
-                        return Ok(false);
+            HostVerifier::ConfiguredKnownHost { logical_host, known_hosts_path, tofu } => {
+                tracing::debug!(host = %logical_host, fingerprint = %fp_str, "checking server key");
+                match check_known_host(known_hosts_path, logical_host, &fp_str) {
+                    KnownHostResult::Match => Ok(true),
+                    KnownHostResult::Mismatch => {
+                        tracing::error!(host = %logical_host, "HOST KEY MISMATCH — possible MITM attack");
+                        Ok(false)
                     }
-                    Ok(true)
-                } else {
-                    tracing::error!(
-                        host = %self.host_name,
-                        fingerprint = %fp_str,
-                        "unknown host key and TOFU disabled — rejecting"
-                    );
-                    Ok(false)
+                    KnownHostResult::Unknown if *tofu => {
+                        tracing::warn!(host = %logical_host, fingerprint = %fp_str, "trust-on-first-use: recording new host key");
+                        if record_host_key(known_hosts_path, logical_host, &fp_str).is_err() {
+                            return Ok(false);
+                        }
+                        Ok(true)
+                    }
+                    KnownHostResult::Unknown => {
+                        tracing::error!(host = %logical_host, "unknown host key and TOFU disabled — rejecting");
+                        Ok(false)
+                    }
                 }
             }
         }

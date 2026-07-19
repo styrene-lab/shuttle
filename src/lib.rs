@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod binding;
 pub mod client;
 pub mod config;
 pub mod exec;
