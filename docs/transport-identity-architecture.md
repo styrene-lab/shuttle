@@ -2,6 +2,14 @@
 
 Shuttle's current production transport is SSH. The public tool surface should not become synonymous with SSH, because Styrene Mesh can provide lower-friction tunnels and RPC for peers already inside the ecosystem.
 
+## Operator contract
+
+An operator with Shuttle installed should be able to reason with the agent about configured remote machines in ordinary operational language. The agent discovers the available hosts and capabilities through Shuttle's tool definitions, inspects remote state with bounded read/probe operations, and performs the operator's authorized directives through the same explicit tool surface.
+
+Shuttle is the execution substrate, not an autonomous remote-management actor. The operator supplies intent, the agent plans and invokes operations, and Shuttle enforces configured host, identity, path, destination, timeout, and output boundaries. Results must contain enough structured evidence for the agent and operator to verify what happened rather than infer success from transport availability.
+
+This contract applies regardless of transport. SSH, Styrene Mesh streams, and Styrene Mesh RPC should project compatible operation-level capabilities while retaining transport and authenticated-principal metadata for policy and audit decisions.
+
 ## Boundary
 
 The extension has three conceptual layers:
