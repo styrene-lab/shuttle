@@ -4,6 +4,8 @@ Shuttle's current production transport is SSH. The public tool surface should no
 
 ## Operator contract
 
+Shuttle is an individual point-to-point substrate. It does **not** own fleet inventory, desired state, scheduling, orchestration, rollout policy, reconciliation, or machine lifecycle. A management system may invoke Shuttle, but those responsibilities remain above its boundary.
+
 An operator with Shuttle installed should be able to reason with the agent about configured remote machines in ordinary operational language. The agent discovers the available hosts and capabilities through Shuttle's tool definitions, inspects remote state with bounded read/probe operations, and performs the operator's authorized directives through the same explicit tool surface.
 
 Shuttle is the execution substrate, not an autonomous remote-management actor. The operator supplies intent, the agent plans and invokes operations, and Shuttle enforces configured host, identity, path, destination, timeout, and output boundaries. Results must contain enough structured evidence for the agent and operator to verify what happened rather than infer success from transport availability.
