@@ -137,6 +137,10 @@ impl SshClient {
         Self::ensure_valid_until(self.valid_until.as_ref())
     }
 
+    pub fn ensure_binding_valid(&self) -> Result<(), ClientError> {
+        self.ensure_valid()
+    }
+
     pub fn is_valid(&self) -> bool {
         self.valid_until
             .as_ref()

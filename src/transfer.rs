@@ -175,6 +175,7 @@ pub async fn scp_push(
     let bytes_written = data.len();
 
     let client_guard = client.lock().await;
+    let validity = client_guard.binding_validity();
     let sftp = client_guard
         .sftp()
         .await
@@ -186,6 +187,11 @@ pub async fn scp_push(
         .write_all(&data)
         .await
         .map_err(|e| omegon_extension::Error::internal_error(format!("sftp write: {e}")))?;
+    if let Some(validity) = validity {
+        validity
+            .ensure_valid()
+            .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))?;
+    }
 
     Ok(json!({
         "host": client_guard.host_name(),
@@ -222,6 +228,7 @@ pub async fn scp_pull(
         .min(config.max_transfer_bytes);
 
     let client_guard = client.lock().await;
+    let validity = client_guard.binding_validity();
     let sftp = client_guard
         .sftp()
         .await
@@ -240,6 +247,11 @@ pub async fn scp_pull(
     let mut buf = vec![0u8; 8192];
     let mut truncated = false;
     while remaining > 0 {
+        if let Some(validity) = &validity {
+            validity
+                .ensure_valid()
+                .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))?;
+        }
         let to_read = remaining.min(buf.len());
         let n = remote
             .read(&mut buf[..to_read])
@@ -289,6 +301,7 @@ pub async fn sftp_ls(
     validate_remote_path(path, &config.allowed_remote_read_roots, "read")?;
 
     let client_guard = client.lock().await;
+    let validity = client_guard.binding_validity();
     let sftp = client_guard
         .sftp()
         .await
@@ -298,6 +311,11 @@ pub async fn sftp_ls(
         .read_dir(path)
         .await
         .map_err(|e| omegon_extension::Error::internal_error(format!("sftp readdir: {e}")))?;
+    if let Some(validity) = validity {
+        validity
+            .ensure_valid()
+            .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))?;
+    }
 
     let items: Vec<Value> = entries
         .into_iter()
@@ -336,6 +354,7 @@ pub async fn sftp_read(
         .min(config.max_transfer_bytes);
 
     let client_guard = client.lock().await;
+    let validity = client_guard.binding_validity();
     let sftp = client_guard
         .sftp()
         .await
@@ -351,6 +370,11 @@ pub async fn sftp_read(
     let mut remaining = max_bytes + 1;
     let mut buf = vec![0u8; 8192];
     while remaining > 0 {
+        if let Some(validity) = &validity {
+            validity
+                .ensure_valid()
+                .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))?;
+        }
         let to_read = remaining.min(buf.len());
         let n = remote
             .read(&mut buf[..to_read])
