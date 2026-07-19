@@ -28,6 +28,10 @@ env:
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
 
 jobs:
+  live-sshd:
+    name: Live SSH release gate
+    uses: ./.github/workflows/live-sshd.yml
+
   build:
     name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}

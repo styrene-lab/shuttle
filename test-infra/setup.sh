@@ -5,7 +5,7 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TEST_DIR="${TMPDIR:-/tmp}/shuttle-test"
 CONTAINER_NAME="shuttle-test-sshd"
-SSH_PORT=2222
+SSH_PORT="${SHUTTLE_TEST_SSH_PORT:-0}"
 TEST_PASSPHRASE="shuttle-test-passphrase"
 IDENTITY_LABEL="test"
 
@@ -52,6 +52,16 @@ $CTR build -t shuttle-test-sshd -f "$SCRIPT_DIR/Dockerfile.sshd" "$SCRIPT_DIR"
 
 $CTR rm -f "$CONTAINER_NAME" 2>/dev/null || true
 
+if [[ "$SSH_PORT" == "0" ]]; then
+    SSH_PORT=$(python3 - <<'PY'
+import socket
+with socket.socket() as sock:
+    sock.bind(("127.0.0.1", 0))
+    print(sock.getsockname()[1])
+PY
+)
+fi
+
 echo ">>> starting sshd container on port $SSH_PORT..."
 $CTR run -d \
     --name "$CONTAINER_NAME" \
@@ -74,14 +84,26 @@ $CTR exec "$CONTAINER_NAME" sh -c "
     echo 'file-b' > /tmp/test-dir/b.txt
 "
 
-# Wait for sshd
+# Wait for sshd to accept TCP connections from the host.
 echo ">>> waiting for sshd..."
-for i in $(seq 1 20); do
-    if $CTR exec "$CONTAINER_NAME" sh -c "echo ready" >/dev/null 2>&1; then
+ready=false
+for _ in $(seq 1 40); do
+    if python3 - "$SSH_PORT" <<'PY' >/dev/null 2>&1
+import socket, sys
+with socket.create_connection(("127.0.0.1", int(sys.argv[1])), timeout=0.25):
+    pass
+PY
+    then
+        ready=true
         break
     fi
-    sleep 0.3
+    sleep 0.25
 done
+if [[ "$ready" != "true" ]]; then
+    echo "ERROR: sshd did not become reachable on 127.0.0.1:$SSH_PORT" >&2
+    $CTR logs "$CONTAINER_NAME" >&2 || true
+    exit 1
+fi
 
 # ── Step 4: Write shuttle config ─────────────────────────────────────────
 

@@ -16,10 +16,9 @@ fn shuttle_binary() -> String {
     format!("{dir}/target/release/shuttle")
 }
 
-fn env_or_skip(var: &str) -> String {
+fn required_env(var: &str) -> String {
     std::env::var(var).unwrap_or_else(|_| {
-        eprintln!("SKIP: {var} not set. Run test-infra/setup.sh first.");
-        std::process::exit(0);
+        panic!("required integration environment variable {var} is missing; run test-infra/run.sh")
     })
 }
 
@@ -33,8 +32,9 @@ struct RpcHarness {
 impl RpcHarness {
     fn start() -> Self {
         let binary = shuttle_binary();
-        let hosts_file = env_or_skip("SHUTTLE_HOSTS_FILE");
-        let known_hosts = env_or_skip("SHUTTLE_KNOWN_HOSTS");
+        let hosts_file = required_env("SHUTTLE_HOSTS_FILE");
+        let known_hosts = required_env("SHUTTLE_KNOWN_HOSTS");
+        let test_dir = required_env("SHUTTLE_TEST_DIR");
 
         let mut child = Command::new(&binary)
             .arg("--rpc")
@@ -67,6 +67,7 @@ impl RpcHarness {
                 "hosts_file": hosts_file,
                 "known_hosts_file": known_hosts,
                 "allowed_hosts": "test-local",
+                "allowed_local_roots": test_dir,
                 "default_timeout_secs": 10,
             }),
         );
@@ -263,6 +264,26 @@ fn test_sftp_read() {
 }
 
 #[test]
+fn test_scp_push_rejects_file_outside_allowed_root() {
+    let mut h = RpcHarness::start();
+    let outside = std::env::temp_dir().join("shuttle-outside-root.txt");
+    std::fs::write(&outside, "blocked").unwrap();
+    let err = h.call_tool_expect_error(
+        "scp_push",
+        json!({
+            "host": "test-local",
+            "local_path": outside,
+            "remote_path": "/tmp/should-not-upload.txt",
+        }),
+    );
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("outside allowed_local_roots"));
+    let _ = std::fs::remove_file(outside);
+}
+
+#[test]
 fn test_scp_push_pull_roundtrip() {
     let mut h = RpcHarness::start();
     let test_dir = std::env::var("SHUTTLE_TEST_DIR").unwrap();
@@ -433,7 +454,10 @@ fn test_local_path_etc_blocked() {
             "remote_path": "/tmp/exfil"
         }),
     );
-    assert!(err["message"].as_str().unwrap().contains("blocked"));
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("outside allowed_local_roots"));
 }
 
 #[test]
@@ -451,8 +475,8 @@ fn test_local_path_ssh_blocked() {
             "remote_path": "/tmp/exfil"
         }),
     );
-    assert!(
-        err["message"].as_str().unwrap().contains("blocked")
-            || err["message"].as_str().unwrap().contains("invalid")
-    );
+    assert!(err["message"]
+        .as_str()
+        .unwrap()
+        .contains("outside allowed_local_roots"));
 }

@@ -19,6 +19,10 @@ on:
   workflow_dispatch:
 
 jobs:
+  live-sshd:
+    name: Live SSH integration
+    uses: ./.github/workflows/live-sshd.yml
+
   build-and-test:
     name: Build + test
     runs-on: ubuntu-latest

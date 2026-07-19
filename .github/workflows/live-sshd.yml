@@ -1,0 +1,29 @@
+name: live-sshd
+
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  integration:
+    name: Disposable sshd integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-live-sshd-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run mandatory disposable-sshd suite
+        run: ./test-infra/run.sh
