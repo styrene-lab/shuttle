@@ -1,5 +1,5 @@
 use crate::auth;
-use crate::binding::HostKeyPin;
+use crate::binding::{BindingValidity, HostKeyPin};
 use crate::config::{AuthProfile, HostEntry};
 use russh::client;
 use russh_keys::key::PublicKey;
@@ -24,13 +24,13 @@ pub struct ConnectionTarget {
     pub address: String,
     pub port: u16,
     pub verifier: HostVerifier,
-    pub valid_until: Option<std::time::SystemTime>,
+    pub valid_until: Option<BindingValidity>,
 }
 
 pub struct SshClient {
     handle: client::Handle<ShuttleHandler>,
     host_name: String,
-    valid_until: Option<std::time::SystemTime>,
+    valid_until: Option<BindingValidity>,
 }
 
 impl SshClient {
@@ -64,7 +64,7 @@ impl SshClient {
         target: ConnectionTarget,
     ) -> Result<Self, ClientError> {
         let addr = format!("{}:{}", target.address, target.port);
-        Self::ensure_valid_until(target.valid_until)?;
+        Self::ensure_valid_until(target.valid_until.as_ref())?;
         let socket_addr = addr
             .to_socket_addrs()
             .map_err(|e| ClientError::Resolve(addr.clone(), e))?
@@ -113,7 +113,7 @@ impl SshClient {
                 "server rejected selected authentication profile".to_string(),
             ));
         }
-        Self::ensure_valid_until(target.valid_until)?;
+        Self::ensure_valid_until(target.valid_until.as_ref())?;
 
         tracing::info!(host = host_name, user = %entry.user, "authenticated");
 
@@ -124,15 +124,27 @@ impl SshClient {
         })
     }
 
-    fn ensure_valid_until(valid_until: Option<std::time::SystemTime>) -> Result<(), ClientError> {
-        if valid_until.is_some_and(|expiry| expiry <= std::time::SystemTime::now()) {
-            return Err(ClientError::Binding("endpoint binding expired".to_string()));
+    fn ensure_valid_until(valid_until: Option<&BindingValidity>) -> Result<(), ClientError> {
+        if let Some(validity) = valid_until {
+            validity
+                .ensure_valid()
+                .map_err(|error| ClientError::Binding(error.to_string()))?;
         }
         Ok(())
     }
 
     fn ensure_valid(&self) -> Result<(), ClientError> {
-        Self::ensure_valid_until(self.valid_until)
+        Self::ensure_valid_until(self.valid_until.as_ref())
+    }
+
+    pub fn is_valid(&self) -> bool {
+        self.valid_until
+            .as_ref()
+            .is_none_or(BindingValidity::is_valid)
+    }
+
+    pub fn binding_validity(&self) -> Option<BindingValidity> {
+        self.valid_until.clone()
     }
 
     pub async fn exec(

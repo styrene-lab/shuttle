@@ -1,4 +1,4 @@
-use crate::binding::EndpointBinding;
+use crate::binding::{BindingLease, BindingValidity};
 use crate::client::{ClientError, ConnectionTarget, HostVerifier, SshClient};
 use crate::config::{AuthProfile, ShuttleConfig};
 use std::collections::HashMap;
@@ -54,7 +54,7 @@ impl ConnectionPool {
         config: &ShuttleConfig,
         root: Option<&RootSecret>,
         password: Option<String>,
-        binding: Option<Arc<EndpointBinding>>,
+        binding: Option<Arc<BindingLease>>,
     ) -> Result<Arc<Mutex<SshClient>>, ClientError> {
         let entry = config
             .resolve_host(host_name)
@@ -62,21 +62,25 @@ impl ConnectionPool {
         let (resolved_auth, profile) = entry
             .resolve_auth(auth_name)
             .map_err(|error| ClientError::Auth(error.to_string()))?;
-        let (address, port, binding_id, host_key_pin, expires_at) = match &binding {
-            Some(binding) => (
-                binding.address.to_string(),
-                binding.port,
-                Some(binding.binding_id.clone()),
-                Some(
-                    binding
-                        .host_key_pin
-                        .canonical_fingerprint()
-                        .map_err(|error| ClientError::Binding(error.to_string()))?,
-                ),
-                Some(binding.expires_at()),
-            ),
+        let (address, port, binding_id, host_key_pin, validity) = match &binding {
+            Some(lease) => {
+                let binding = lease.binding();
+                (
+                    binding.address.to_string(),
+                    binding.port,
+                    Some(binding.binding_id.clone()),
+                    Some(
+                        binding
+                            .host_key_pin
+                            .canonical_fingerprint()
+                            .map_err(|error| ClientError::Binding(error.to_string()))?,
+                    ),
+                    Some(lease.validity()),
+                )
+            }
             None => (entry.address.clone(), entry.port, None, None, None),
         };
+        let expires_at = validity.as_ref().map(BindingValidity::expires_at);
         let key = ConnectionKey {
             host: host_name.to_owned(),
             address,
@@ -93,7 +97,10 @@ impl ConnectionPool {
                 let expired = pooled
                     .expires_at
                     .is_some_and(|expires_at| expires_at <= std::time::SystemTime::now());
-                if !expired && !pooled.client.lock().await.is_closed() {
+                if !expired
+                    && pooled.client.lock().await.is_valid()
+                    && !pooled.client.lock().await.is_closed()
+                {
                     pooled.last_used = Instant::now();
                     tracing::debug!(host = host_name, auth = %key.auth, "reusing pooled SSH session");
                     return Ok(pooled.client.clone());
@@ -111,7 +118,8 @@ impl ConnectionPool {
 
         let connect = async {
             match binding.as_ref() {
-                Some(binding) => {
+                Some(lease) => {
+                    let binding = lease.binding();
                     let target = ConnectionTarget {
                         address: binding.address.to_string(),
                         port: binding.port,
@@ -119,7 +127,7 @@ impl ConnectionPool {
                             logical_host: host_name.to_string(),
                             pin: binding.host_key_pin.clone(),
                         },
-                        valid_until: Some(binding.expires_at()),
+                        valid_until: Some(lease.validity()),
                     };
                     SshClient::connect_target(host_name, entry, &profile, root, password, target)
                         .await
@@ -144,6 +152,11 @@ impl ConnectionPool {
                 .min(std::time::Duration::from_secs(config.connect_timeout_secs)),
             None => std::time::Duration::from_secs(config.connect_timeout_secs),
         };
+        if let Some(validity) = validity.as_ref() {
+            validity
+                .ensure_valid()
+                .map_err(|error| ClientError::Binding(error.to_string()))?;
+        }
         let client = Arc::new(Mutex::new(
             tokio::time::timeout(connect_timeout, connect)
                 .await
@@ -159,7 +172,10 @@ impl ConnectionPool {
             let expired = existing
                 .expires_at
                 .is_some_and(|expires_at| expires_at <= std::time::SystemTime::now());
-            if !expired && !existing.client.lock().await.is_closed() {
+            if !expired
+                && existing.client.lock().await.is_valid()
+                && !existing.client.lock().await.is_closed()
+            {
                 existing.last_used = Instant::now();
                 return Ok(existing.client.clone());
             }

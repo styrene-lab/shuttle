@@ -185,14 +185,36 @@ impl TunnelManager {
                         let tid = spawn_id.clone();
                         let conn_runtime = spawn_runtime.clone();
                         tokio::spawn(async move {
-                            let channel_result = {
+                            let (channel_result, validity) = {
                                 let client_guard = client.lock().await;
-                                client_guard.direct_tcpip(&rh, remote_port as u32, "127.0.0.1", 0).await
+                                (
+                                    client_guard.direct_tcpip(&rh, remote_port as u32, "127.0.0.1", 0).await,
+                                    client_guard.binding_validity(),
+                                )
                             };
                             match channel_result {
                                 Ok(channel) => {
                                     let mut stream = channel.into_stream();
-                                    if let Err(error) = tokio::io::copy_bidirectional(&mut local_stream, &mut stream).await {
+                                    let forwarding = tokio::io::copy_bidirectional(&mut local_stream, &mut stream);
+                                    tokio::pin!(forwarding);
+                                    let result = if let Some(validity) = validity {
+                                        loop {
+                                            tokio::select! {
+                                                result = &mut forwarding => break result,
+                                                _ = tokio::time::sleep(std::time::Duration::from_millis(250)) => {
+                                                    if !validity.is_valid() {
+                                                        break Err(std::io::Error::new(
+                                                            std::io::ErrorKind::PermissionDenied,
+                                                            "endpoint binding expired or was revoked",
+                                                        ));
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        forwarding.await
+                                    };
+                                    if let Err(error) = result {
                                         let mut state = conn_runtime.lock().await;
                                         state.failed_connections += 1;
                                         state.last_error = Some(format!("forwarding failed: {error}"));

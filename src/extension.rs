@@ -237,7 +237,7 @@ impl ShuttleExtension {
                     self.bindings.resolve(handle).await.map_err(|error| {
                         omegon_extension::Error::invalid_params(error.to_string())
                     })?;
-                if binding.logical_host != host_name {
+                if binding.binding().logical_host != host_name {
                     return Err(omegon_extension::Error::invalid_params(
                         "endpoint binding logical host mismatch",
                     ));
