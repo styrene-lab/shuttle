@@ -1,6 +1,8 @@
-# SSH Migration Skill — Shuttle Extension
+# SSH Migration and Operations Skill — Shuttle Extension
 
-Guidance for operators migrating from traditional SSH key management to shuttle's deterministic HKDF-derived identity model.
+> **Release status:** Shuttle `0.x` is a Security-Hardened Controlled Preview distributed through Armory's Live Preview channel. `1.0.0` is the GA target; see `ROADMAP.md` for exit criteria.
+
+Guidance for operators migrating from traditional SSH key management to Shuttle's deterministic identity model and operating configured remote machines safely.
 
 ## What Operators Have Today
 
