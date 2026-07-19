@@ -200,6 +200,10 @@ impl SshClient {
     pub fn host_name(&self) -> &str {
         &self.host_name
     }
+
+    pub fn is_closed(&self) -> bool {
+        self.handle.is_closed()
+    }
 }
 
 #[derive(Debug)]

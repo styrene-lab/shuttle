@@ -418,6 +418,49 @@ mod tool_tests {
     }
 }
 
+mod migrate_tests {
+    #[test]
+    fn wildcard_and_multi_alias_hosts_are_reported_but_not_supported() {
+        let parsed = shuttle::migrate::parse_ssh_config_for_test(
+            "Host exact\n  HostName exact.internal\nHost web-*\n  HostName wildcard.internal\nHost one two\n  HostName shared.internal\nHost !blocked *\n  HostName ignored.internal\n",
+        );
+        assert_eq!(parsed[0], ("exact".to_string(), true));
+        assert_eq!(parsed[1], ("web-*".to_string(), false));
+        assert_eq!(parsed[2], ("one".to_string(), false));
+        assert_eq!(parsed[3], ("!blocked".to_string(), false));
+    }
+}
+
+mod tunnel_tests {
+    #[test]
+    fn destination_allowlist_requires_exact_host_and_port() {
+        let allowed = vec![
+            "db.internal:5432".to_string(),
+            "cache.internal:*".to_string(),
+        ];
+        assert!(shuttle::tunnel::tunnel_destination_allowed_for_test(
+            &allowed,
+            "DB.INTERNAL.",
+            5432
+        ));
+        assert!(shuttle::tunnel::tunnel_destination_allowed_for_test(
+            &allowed,
+            "cache.internal",
+            6379
+        ));
+        assert!(!shuttle::tunnel::tunnel_destination_allowed_for_test(
+            &allowed,
+            "db.internal.evil",
+            5432
+        ));
+        assert!(!shuttle::tunnel::tunnel_destination_allowed_for_test(
+            &allowed,
+            "db.internal",
+            3306
+        ));
+    }
+}
+
 // ── Exec validation tests ─────────────────────────────────────────────────
 
 mod exec_tests {

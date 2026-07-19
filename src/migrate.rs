@@ -9,6 +9,7 @@ struct SshConfigEntry {
     port: Option<u16>,
     identity_file: Option<String>,
     proxy_jump: Option<String>,
+    supported: bool,
 }
 
 struct SshKeyFile {
@@ -65,6 +66,7 @@ pub async fn ssh_migrate_analyze(_params: &Value) -> omegon_extension::Result<Va
         .map(|e| {
             let mut entry = json!({
                 "alias": sanitize_for_display(&e.host_alias),
+                "supported": e.supported,
             });
             if let Some(ref h) = e.hostname {
                 entry["hostname"] = json!(h);
@@ -96,6 +98,9 @@ pub async fn ssh_migrate_analyze(_params: &Value) -> omegon_extension::Result<Va
     // Group hosts by identity file basename to suggest label assignments
     let mut label_groups: HashMap<String, Vec<String>> = HashMap::new();
     for entry in &config_entries {
+        if !entry.supported {
+            continue;
+        }
         let key = entry
             .identity_file
             .as_deref()
@@ -129,7 +134,7 @@ pub async fn ssh_migrate_analyze(_params: &Value) -> omegon_extension::Result<Va
     ];
 
     for entry in &config_entries {
-        if entry.host_alias == "*" || entry.hostname.is_none() {
+        if !entry.supported || entry.host_alias == "*" || entry.hostname.is_none() {
             continue;
         }
         let alias = sanitize_toml_key(&entry.host_alias);
@@ -186,6 +191,27 @@ pub async fn ssh_migrate_analyze(_params: &Value) -> omegon_extension::Result<Va
     Ok(report)
 }
 
+#[doc(hidden)]
+pub fn parse_ssh_config_for_test(content: &str) -> Vec<(String, bool)> {
+    let path = std::env::temp_dir().join(format!(
+        "shuttle-migrate-test-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    if std::fs::write(&path, content).is_err() {
+        return Vec::new();
+    }
+    let result = parse_ssh_config(&path)
+        .into_iter()
+        .map(|entry| (entry.host_alias, entry.supported))
+        .collect();
+    let _ = std::fs::remove_file(path);
+    result
+}
+
 fn parse_ssh_config(path: &Path) -> Vec<SshConfigEntry> {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
@@ -211,13 +237,19 @@ fn parse_ssh_config(path: &Path) -> Vec<SshConfigEntry> {
                 if let Some(entry) = current.take() {
                     entries.push(entry);
                 }
+                let aliases: Vec<&str> = value.split_whitespace().collect();
+                let supported = aliases.len() == 1
+                    && !aliases[0].contains('*')
+                    && !aliases[0].contains('?')
+                    && !aliases[0].starts_with('!');
                 current = Some(SshConfigEntry {
-                    host_alias: value,
+                    host_alias: aliases.first().copied().unwrap_or("").to_string(),
                     hostname: None,
                     user: None,
                     port: None,
                     identity_file: None,
                     proxy_jump: None,
+                    supported,
                 });
             }
             "hostname" => {

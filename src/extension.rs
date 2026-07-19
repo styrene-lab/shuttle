@@ -134,7 +134,8 @@ impl ShuttleExtension {
     }
 
     async fn execute_tool(&self, name: &str, params: Value) -> omegon_extension::Result<Value> {
-        match name {
+        let started = std::time::Instant::now();
+        let result = match name {
             "ssh_exec" => self.tool_ssh_exec(params).await,
             "ssh_script" => self.tool_ssh_script(params).await,
             "scp_push" => self.tool_scp_push(params).await,
@@ -151,7 +152,18 @@ impl ShuttleExtension {
             _ => Err(omegon_extension::Error::method_not_found(&format!(
                 "tool '{name}'"
             ))),
+        };
+        match &result {
+            Ok(_) => tracing::debug!(
+                tool = name,
+                elapsed_ms = started.elapsed().as_millis(),
+                "tool call completed"
+            ),
+            Err(error) => {
+                tracing::error!(tool = name, elapsed_ms = started.elapsed().as_millis(), error = %error, "tool call failed")
+            }
         }
+        result
     }
 
     fn extract_host(params: &Value) -> omegon_extension::Result<&str> {
@@ -327,7 +339,23 @@ impl ShuttleExtension {
         let auth = Self::extract_auth(&params)?;
         let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
-        crate::transfer::scp_pull(&client, &config, &params).await
+        let result = crate::transfer::scp_pull(&client, &config, &params).await;
+        if let Ok(ref value) = result {
+            tracing::info!(
+                tool = "scp_pull",
+                host,
+                bytes = value
+                    .get("bytes_written")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0),
+                truncated = value
+                    .get("truncated")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false),
+                "download complete"
+            );
+        }
+        result
     }
 
     async fn tool_sftp_ls(&self, params: Value) -> omegon_extension::Result<Value> {
@@ -342,7 +370,20 @@ impl ShuttleExtension {
         let auth = Self::extract_auth(&params)?;
         let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
-        crate::transfer::sftp_ls(&client, &config, &params).await
+        let result = crate::transfer::sftp_ls(&client, &config, &params).await;
+        if let Ok(ref value) = result {
+            tracing::info!(
+                tool = "sftp_ls",
+                host,
+                entries = value
+                    .get("entries")
+                    .and_then(|v| v.as_array())
+                    .map(Vec::len)
+                    .unwrap_or(0),
+                "directory listing complete"
+            );
+        }
+        result
     }
 
     async fn tool_sftp_read(&self, params: Value) -> omegon_extension::Result<Value> {

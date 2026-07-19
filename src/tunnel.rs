@@ -35,7 +35,44 @@ fn tunnel_destination_allowed(allowed: &[String], remote_host: &str, remote_port
     })
 }
 
-/// Tracks active tunnels and their state.
+#[doc(hidden)]
+pub fn tunnel_destination_allowed_for_test(
+    allowed: &[String],
+    remote_host: &str,
+    remote_port: u16,
+) -> bool {
+    tunnel_destination_allowed(allowed, remote_host, remote_port)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum TunnelStatus {
+    Listening,
+    Degraded,
+    Closed,
+}
+
+impl TunnelStatus {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Listening => "listening",
+            Self::Degraded => "degraded",
+            Self::Closed => "closed",
+        }
+    }
+}
+
+#[derive(Debug)]
+struct TunnelRuntime {
+    status: TunnelStatus,
+    active_connections: usize,
+    accepted_connections: u64,
+    failed_connections: u64,
+    last_error: Option<String>,
+}
+
+/// Tracks local listeners and their forwarding health independently from the
+/// underlying transport. A future mesh transport can feed the same lifecycle
+/// surface without changing the public tunnel tools.
 pub struct TunnelManager {
     tunnels: Arc<Mutex<HashMap<String, TunnelEntry>>>,
     next_id: Arc<std::sync::atomic::AtomicU64>,
@@ -47,6 +84,7 @@ struct TunnelEntry {
     remote_host: String,
     remote_port: u16,
     cancel: tokio::sync::watch::Sender<bool>,
+    runtime: Arc<Mutex<TunnelRuntime>>,
 }
 
 impl Default for TunnelManager {
@@ -63,10 +101,6 @@ impl TunnelManager {
         }
     }
 
-    /// Open a local-to-remote port-forward tunnel.
-    ///
-    /// Binds a local TCP listener and for each incoming connection, opens a
-    /// direct-tcpip channel through the SSH host to forward traffic.
     pub async fn open(
         &self,
         host_name: &str,
@@ -76,22 +110,18 @@ impl TunnelManager {
         allowed_tunnel_destinations: &Option<Vec<String>>,
         ssh_client: Arc<Mutex<crate::client::SshClient>>,
     ) -> omegon_extension::Result<Value> {
-        // Enforce tunnel count limit
         let current = self.tunnels.lock().await.len();
         if current >= MAX_TUNNELS {
             return Err(omegon_extension::Error::internal_error(format!(
                 "tunnel limit reached ({MAX_TUNNELS}). Close an existing tunnel first."
             )));
         }
-
-        // Enforce unprivileged ports only
         if local_port < MIN_LOCAL_PORT {
             return Err(omegon_extension::Error::invalid_params(format!(
                 "local_port must be >= {MIN_LOCAL_PORT} (got {local_port})"
             )));
         }
 
-        // Enforce tunnel destination allowlist
         if let Some(ref allowed) = allowed_tunnel_destinations {
             let dest = format!("{}:{remote_port}", normalize_tunnel_host(remote_host));
             if !tunnel_destination_allowed(allowed, remote_host, remote_port) {
@@ -99,16 +129,10 @@ impl TunnelManager {
                     "tunnel destination {dest} not in allowed_tunnel_destinations"
                 )));
             }
-        } else {
-            // No explicit allowlist — only permit strict loopback.
-            // Parse as IP to block alternative representations (0.0.0.0,
-            // 127.0.0.2, ::ffff:127.0.0.1, hex/octal forms).
-            if !is_strict_loopback(remote_host) {
-                return Err(omegon_extension::Error::invalid_params(format!(
-                    "tunnel to '{remote_host}' requires allowed_tunnel_destinations \
-                     in config (only 127.0.0.1 and ::1 are allowed by default)"
-                )));
-            }
+        } else if !is_strict_loopback(remote_host) {
+            return Err(omegon_extension::Error::invalid_params(format!(
+                "tunnel to '{remote_host}' requires allowed_tunnel_destinations in config (only 127.0.0.1 and ::1 are allowed by default)"
+            )));
         }
 
         let listener = TcpListener::bind(format!("127.0.0.1:{local_port}"))
@@ -116,61 +140,87 @@ impl TunnelManager {
             .map_err(|e| {
                 omegon_extension::Error::internal_error(format!("bind port {local_port}: {e}"))
             })?;
-
         let actual_port = listener
             .local_addr()
             .map(|a| a.port())
             .unwrap_or(local_port);
-
         let id = format!(
             "tun-{}",
             self.next_id
                 .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         );
-
-        let (cancel_tx, cancel_rx) = tokio::sync::watch::channel(false);
+        let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+        let runtime = Arc::new(Mutex::new(TunnelRuntime {
+            status: TunnelStatus::Listening,
+            active_connections: 0,
+            accepted_connections: 0,
+            failed_connections: 0,
+            last_error: None,
+        }));
 
         let rhost = remote_host.to_string();
-        let rport = remote_port;
         let spawn_id = id.clone();
-
+        let spawn_runtime = runtime.clone();
         tokio::spawn(async move {
-            let tunnel_id = spawn_id;
-            let mut cancel_rx = cancel_rx;
             loop {
                 tokio::select! {
                     accept = listener.accept() => {
-                        let Ok((mut local_stream, _)) = accept else {
-                            break;
+                        let (mut local_stream, _) = match accept {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let mut state = spawn_runtime.lock().await;
+                                state.status = TunnelStatus::Degraded;
+                                state.last_error = Some(format!("local accept failed: {error}"));
+                                tracing::error!(tunnel = %spawn_id, error = %error, "tunnel listener failed");
+                                break;
+                            }
                         };
+                        {
+                            let mut state = spawn_runtime.lock().await;
+                            state.accepted_connections += 1;
+                            state.active_connections += 1;
+                        }
                         let client = ssh_client.clone();
                         let rh = rhost.clone();
-                        let tid = tunnel_id.clone();
+                        let tid = spawn_id.clone();
+                        let conn_runtime = spawn_runtime.clone();
                         tokio::spawn(async move {
-                            let client_guard = client.lock().await;
-                            let channel = match client_guard
-                                .direct_tcpip(&rh, rport as u32, "127.0.0.1", 0)
-                                .await
-                            {
-                                Ok(ch) => ch,
-                                Err(e) => {
-                                    tracing::error!(tunnel = %tid, "direct-tcpip failed: {e}");
-                                    return;
-                                }
+                            let channel_result = {
+                                let client_guard = client.lock().await;
+                                client_guard.direct_tcpip(&rh, remote_port as u32, "127.0.0.1", 0).await
                             };
-                            drop(client_guard);
-                            let mut stream = channel.into_stream();
-                            let _ = tokio::io::copy_bidirectional(&mut local_stream, &mut stream).await;
+                            match channel_result {
+                                Ok(channel) => {
+                                    let mut stream = channel.into_stream();
+                                    if let Err(error) = tokio::io::copy_bidirectional(&mut local_stream, &mut stream).await {
+                                        let mut state = conn_runtime.lock().await;
+                                        state.failed_connections += 1;
+                                        state.last_error = Some(format!("forwarding failed: {error}"));
+                                        tracing::warn!(tunnel = %tid, error = %error, "tunnel forwarding failed");
+                                    }
+                                }
+                                Err(error) => {
+                                    let mut state = conn_runtime.lock().await;
+                                    state.status = TunnelStatus::Degraded;
+                                    state.failed_connections += 1;
+                                    state.last_error = Some(format!("direct-tcpip failed: {error}"));
+                                    tracing::error!(tunnel = %tid, error = %error, "direct-tcpip failed");
+                                }
+                            }
+                            let mut state = conn_runtime.lock().await;
+                            state.active_connections = state.active_connections.saturating_sub(1);
                         });
                     }
-                    _ = cancel_rx.changed() => {
-                        if *cancel_rx.borrow() {
+                    changed = cancel_rx.changed() => {
+                        if changed.is_err() || *cancel_rx.borrow() {
                             break;
                         }
                     }
                 }
             }
-            tracing::info!(tunnel = %tunnel_id, "tunnel closed");
+            let mut state = spawn_runtime.lock().await;
+            state.status = TunnelStatus::Closed;
+            tracing::info!(tunnel = %spawn_id, "tunnel listener closed");
         });
 
         self.tunnels.lock().await.insert(
@@ -181,49 +231,49 @@ impl TunnelManager {
                 remote_host: remote_host.to_string(),
                 remote_port,
                 cancel: cancel_tx,
+                runtime,
             },
         );
 
         Ok(json!({
             "tunnel_id": id,
             "host": host_name,
+            "transport": "ssh",
+            "status": "listening",
             "local_port": actual_port,
             "remote_host": remote_host,
             "remote_port": remote_port,
         }))
     }
 
-    /// Close a tunnel by ID.
     pub async fn close(&self, tunnel_id: &str) -> omegon_extension::Result<Value> {
-        let mut tunnels = self.tunnels.lock().await;
-        let entry = tunnels.remove(tunnel_id).ok_or_else(|| {
+        let entry = self.tunnels.lock().await.remove(tunnel_id).ok_or_else(|| {
             omegon_extension::Error::invalid_params(format!("tunnel not found: {tunnel_id}"))
         })?;
-
         let _ = entry.cancel.send(true);
-
-        Ok(json!({
-            "tunnel_id": tunnel_id,
-            "closed": true,
-        }))
+        entry.runtime.lock().await.status = TunnelStatus::Closed;
+        Ok(json!({ "tunnel_id": tunnel_id, "closed": true }))
     }
 
-    /// List all active tunnels.
     pub async fn list(&self) -> omegon_extension::Result<Value> {
         let tunnels = self.tunnels.lock().await;
-        let items: Vec<Value> = tunnels
-            .iter()
-            .map(|(id, t)| {
-                json!({
-                    "tunnel_id": id,
-                    "host": t.host,
-                    "local_port": t.local_port,
-                    "remote_host": t.remote_host,
-                    "remote_port": t.remote_port,
-                })
-            })
-            .collect();
-
+        let mut items = Vec::with_capacity(tunnels.len());
+        for (id, tunnel) in tunnels.iter() {
+            let runtime = tunnel.runtime.lock().await;
+            items.push(json!({
+                "tunnel_id": id,
+                "host": tunnel.host,
+                "transport": "ssh",
+                "status": runtime.status.as_str(),
+                "local_port": tunnel.local_port,
+                "remote_host": tunnel.remote_host,
+                "remote_port": tunnel.remote_port,
+                "active_connections": runtime.active_connections,
+                "accepted_connections": runtime.accepted_connections,
+                "failed_connections": runtime.failed_connections,
+                "last_error": runtime.last_error,
+            }));
+        }
         Ok(json!({ "tunnels": items }))
     }
 }

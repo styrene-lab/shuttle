@@ -108,6 +108,16 @@ fn validate_remote_path(
     allowed_roots: &Option<Vec<String>>,
     operation: &str,
 ) -> omegon_extension::Result<()> {
+    if !path.starts_with('/') || path.split('/').any(|component| component == "..") {
+        return Err(omegon_extension::Error::invalid_params(format!(
+            "remote {operation} path must be absolute and cannot contain '..'"
+        )));
+    }
+    if path.as_bytes().contains(&0) {
+        return Err(omegon_extension::Error::invalid_params(format!(
+            "remote {operation} path contains a null byte"
+        )));
+    }
     if let Some(roots) = allowed_roots {
         let normalized = path.trim_end_matches('/');
         if !roots
@@ -155,6 +165,12 @@ pub async fn scp_push(
     let data = tokio::fs::read(&local)
         .await
         .map_err(|e| omegon_extension::Error::internal_error(format!("read {local_path}: {e}")))?;
+    if data.len() > config.max_output_bytes {
+        return Err(omegon_extension::Error::invalid_params(format!(
+            "local file exceeds max_output_bytes ({})",
+            config.max_output_bytes
+        )));
+    }
 
     let bytes_written = data.len();
 
