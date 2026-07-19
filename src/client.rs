@@ -266,7 +266,9 @@ impl client::Handler for ShuttleHandler {
         let fp_str = server_public_key.fingerprint().to_string();
         match &self.verifier {
             HostVerifier::EphemeralPinnedKey { logical_host, pin } => {
-                let expected = pin.canonical_fingerprint().map_err(|_| russh::Error::UnknownKey)?;
+                let expected = pin
+                    .canonical_fingerprint()
+                    .map_err(|_| russh::Error::UnknownKey)?;
                 let key_algorithm = server_public_key.name();
                 let matched = key_algorithm == pin.key_algorithm && fp_str == expected;
                 if !matched {
@@ -274,7 +276,11 @@ impl client::Handler for ShuttleHandler {
                 }
                 Ok(matched)
             }
-            HostVerifier::ConfiguredKnownHost { logical_host, known_hosts_path, tofu } => {
+            HostVerifier::ConfiguredKnownHost {
+                logical_host,
+                known_hosts_path,
+                tofu,
+            } => {
                 tracing::debug!(host = %logical_host, fingerprint = %fp_str, "checking server key");
                 match check_known_host(known_hosts_path, logical_host, &fp_str) {
                     KnownHostResult::Match => Ok(true),
@@ -361,6 +367,9 @@ pub enum ClientError {
     Resolve(String, std::io::Error),
     #[error("connection error: {0}")]
     Connection(russh::Error),
+    #[error("endpoint binding rejected: {0}")]
+    Binding(String),
+
     #[error("authentication failed: {0}")]
     Auth(String),
     #[error("command timed out on {0} after {1:?}")]

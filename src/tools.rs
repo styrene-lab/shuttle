@@ -17,6 +17,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Optional exact authentication profile name."
                     },
+                    "endpoint_binding": {
+                        "type": "string",
+                        "description": "Optional harness-issued ephemeral endpoint binding handle."
+                    },
                     "command": {
                         "type": "string",
                         "description": "Shell command to execute on the remote host."
@@ -43,6 +47,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "auth": {
                         "type": "string",
                         "description": "Optional exact authentication profile name."
+                    },
+                    "endpoint_binding": {
+                        "type": "string",
+                        "description": "Optional harness-issued ephemeral endpoint binding handle."
                     },
                     "script": {
                         "type": "string",
@@ -75,6 +83,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Optional exact authentication profile name."
                     },
+                    "endpoint_binding": {
+                        "type": "string",
+                        "description": "Optional harness-issued ephemeral endpoint binding handle."
+                    },
                     "local_path": {
                         "type": "string",
                         "description": "Absolute path to the local file."
@@ -101,6 +113,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "auth": {
                         "type": "string",
                         "description": "Optional exact authentication profile name."
+                    },
+                    "endpoint_binding": {
+                        "type": "string",
+                        "description": "Optional harness-issued ephemeral endpoint binding handle."
                     },
                     "remote_path": {
                         "type": "string",
@@ -129,6 +145,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Optional exact authentication profile name."
                     },
+                    "endpoint_binding": {
+                        "type": "string",
+                        "description": "Optional harness-issued ephemeral endpoint binding handle."
+                    },
                     "path": {
                         "type": "string",
                         "description": "Absolute directory path on the remote host."
@@ -151,6 +171,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "auth": {
                         "type": "string",
                         "description": "Optional exact authentication profile name."
+                    },
+                    "endpoint_binding": {
+                        "type": "string",
+                        "description": "Optional harness-issued ephemeral endpoint binding handle."
                     },
                     "path": {
                         "type": "string",

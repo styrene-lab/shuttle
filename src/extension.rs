@@ -1,3 +1,4 @@
+use crate::binding::{BindingRegistry, EndpointBinding};
 use crate::config::{AuthProfile, ShuttleConfig};
 use crate::pool::ConnectionPool;
 use crate::secrets::SecretStore;
@@ -15,6 +16,7 @@ pub struct ShuttleExtension {
     pool: ConnectionPool,
     tunnels: TunnelManager,
     secrets: SecretStore,
+    bindings: BindingRegistry,
     /// Holds the signer so re-derivation works after TTL expiry without
     /// needing the env var again.
     signer: Arc<RwLock<Option<Box<dyn IdentitySigner>>>>,
@@ -64,6 +66,7 @@ impl ShuttleExtension {
             pool: ConnectionPool::new(),
             tunnels: TunnelManager::new(),
             secrets: SecretStore::new(),
+            bindings: BindingRegistry::default(),
             signer: Arc::new(RwLock::new(None)),
             root_cache: Arc::new(RwLock::new(CachedRoot::empty())),
         }
@@ -183,6 +186,15 @@ impl ShuttleExtension {
         }
     }
 
+    fn extract_binding(params: &Value) -> omegon_extension::Result<Option<&str>> {
+        match params.get("endpoint_binding") {
+            None => Ok(None),
+            Some(value) => value.as_str().map(Some).ok_or_else(|| {
+                omegon_extension::Error::invalid_params("'endpoint_binding' must be a string")
+            }),
+        }
+    }
+
     fn rpc_tool_args(params: &Value) -> Value {
         params
             .get("arguments")
@@ -200,6 +212,7 @@ impl ShuttleExtension {
         &self,
         host_name: &str,
         auth_name: Option<&str>,
+        binding_handle: Option<&str>,
     ) -> omegon_extension::Result<Arc<tokio::sync::Mutex<crate::client::SshClient>>> {
         let config = self.config.read().await;
         let entry = config
@@ -218,8 +231,31 @@ impl ShuttleExtension {
             AuthProfile::PublicKey { .. } => None,
         };
 
+        let binding = match binding_handle {
+            Some(handle) => {
+                let binding =
+                    self.bindings.resolve(handle).await.map_err(|error| {
+                        omegon_extension::Error::invalid_params(error.to_string())
+                    })?;
+                if binding.logical_host != host_name {
+                    return Err(omegon_extension::Error::invalid_params(
+                        "endpoint binding logical host mismatch",
+                    ));
+                }
+                Some(binding)
+            }
+            None => None,
+        };
+
         self.pool
-            .acquire(host_name, auth_name, &config, root.as_ref(), password)
+            .acquire(
+                host_name,
+                auth_name,
+                &config,
+                root.as_ref(),
+                password,
+                binding,
+            )
             .await
             .map_err(|error| omegon_extension::Error::internal_error(error.to_string()))
     }
@@ -238,7 +274,8 @@ impl ShuttleExtension {
             "executing remote command"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         let result = crate::exec::ssh_exec(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -273,7 +310,8 @@ impl ShuttleExtension {
             "executing remote script"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         let result = crate::exec::ssh_script(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -305,7 +343,8 @@ impl ShuttleExtension {
             "uploading file"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         let result = crate::transfer::scp_push(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -337,7 +376,8 @@ impl ShuttleExtension {
             "downloading file"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         let result = crate::transfer::scp_pull(&client, &config, &params).await;
         if let Ok(ref value) = result {
@@ -368,7 +408,8 @@ impl ShuttleExtension {
             "listing remote directory"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         let result = crate::transfer::sftp_ls(&client, &config, &params).await;
         if let Ok(ref value) = result {
@@ -396,7 +437,8 @@ impl ShuttleExtension {
             "reading remote file"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         let result = crate::transfer::sftp_read(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -450,7 +492,8 @@ impl ShuttleExtension {
             "opening tunnel"
         );
         let auth = Self::extract_auth(&params)?;
-        let client = self.acquire_client(host, auth).await?;
+        let binding = Self::extract_binding(&params)?;
+        let client = self.acquire_client(host, auth, binding).await?;
         let config = self.config.read().await;
         self.tunnels
             .open(
@@ -539,7 +582,8 @@ impl ShuttleExtension {
         tracing::info!(tool = "ssh_ping", host, "testing connectivity");
         let start = std::time::Instant::now();
         let auth = Self::extract_auth(&params)?;
-        match self.acquire_client(host, auth).await {
+        let binding = Self::extract_binding(&params)?;
+        match self.acquire_client(host, auth, binding).await {
             Ok(_client) => {
                 let elapsed = start.elapsed();
                 tracing::info!(
@@ -622,6 +666,22 @@ impl omegon_extension::Extension for ShuttleExtension {
                 let names: Vec<&str> = values.keys().map(String::as_str).collect();
                 tracing::info!(?names, "bootstrap secrets received");
                 self.secrets.bootstrap(values).await;
+                Ok(json!({ "acknowledged": true, "received": count }))
+            }
+
+            "bootstrap_endpoint_bindings" => {
+                let bindings: Vec<EndpointBinding> = serde_json::from_value(
+                    params.get("bindings").cloned().unwrap_or_else(|| json!([])),
+                )
+                .map_err(|error| {
+                    omegon_extension::Error::invalid_params(format!(
+                        "invalid endpoint bindings: {error}"
+                    ))
+                })?;
+                let count =
+                    self.bindings.replace(bindings).await.map_err(|error| {
+                        omegon_extension::Error::invalid_params(error.to_string())
+                    })?;
                 Ok(json!({ "acknowledged": true, "received": count }))
             }
 

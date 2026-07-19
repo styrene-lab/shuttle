@@ -1,4 +1,5 @@
-use crate::client::{ClientError, SshClient};
+use crate::binding::EndpointBinding;
+use crate::client::{ClientError, ConnectionTarget, HostVerifier, SshClient};
 use crate::config::{AuthProfile, ShuttleConfig};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -13,11 +14,14 @@ struct ConnectionKey {
     port: u16,
     user: String,
     auth: String,
+    binding_id: Option<String>,
+    host_key_pin: Option<String>,
 }
 
 struct PooledConnection {
     client: Arc<Mutex<SshClient>>,
     last_used: Instant,
+    expires_at: Option<std::time::SystemTime>,
 }
 
 /// Bounded cache of authenticated SSH sessions.
@@ -50,6 +54,7 @@ impl ConnectionPool {
         config: &ShuttleConfig,
         root: Option<&RootSecret>,
         password: Option<String>,
+        binding: Option<Arc<EndpointBinding>>,
     ) -> Result<Arc<Mutex<SshClient>>, ClientError> {
         let entry = config
             .resolve_host(host_name)
@@ -57,18 +62,38 @@ impl ConnectionPool {
         let (resolved_auth, profile) = entry
             .resolve_auth(auth_name)
             .map_err(|error| ClientError::Auth(error.to_string()))?;
+        let (address, port, binding_id, host_key_pin, expires_at) = match &binding {
+            Some(binding) => (
+                binding.address.to_string(),
+                binding.port,
+                Some(binding.binding_id.clone()),
+                Some(
+                    binding
+                        .host_key_pin
+                        .canonical_fingerprint()
+                        .map_err(|error| ClientError::Binding(error.to_string()))?,
+                ),
+                Some(binding.expires_at()),
+            ),
+            None => (entry.address.clone(), entry.port, None, None, None),
+        };
         let key = ConnectionKey {
             host: host_name.to_owned(),
-            address: entry.address.clone(),
-            port: entry.port,
+            address,
+            port,
             user: entry.user.clone(),
             auth: resolved_auth,
+            binding_id,
+            host_key_pin,
         };
 
         {
             let mut entries = self.entries.lock().await;
             if let Some(pooled) = entries.get_mut(&key) {
-                if !pooled.client.lock().await.is_closed() {
+                let expired = pooled
+                    .expires_at
+                    .is_some_and(|expires_at| expires_at <= std::time::SystemTime::now());
+                if !expired && !pooled.client.lock().await.is_closed() {
                     pooled.last_used = Instant::now();
                     tracing::debug!(host = host_name, auth = %key.auth, "reusing pooled SSH session");
                     return Ok(pooled.client.clone());
@@ -84,17 +109,37 @@ impl ConnectionPool {
             ));
         }
 
+        let connect = async {
+            match binding.as_ref() {
+                Some(binding) => {
+                    let target = ConnectionTarget {
+                        address: binding.address.to_string(),
+                        port: binding.port,
+                        verifier: HostVerifier::EphemeralPinnedKey {
+                            logical_host: host_name.to_string(),
+                            pin: binding.host_key_pin.clone(),
+                        },
+                    };
+                    SshClient::connect_target(host_name, entry, &profile, root, password, target)
+                        .await
+                }
+                None => {
+                    SshClient::connect(
+                        host_name,
+                        entry,
+                        &profile,
+                        root,
+                        password,
+                        &config.known_hosts_file,
+                    )
+                    .await
+                }
+            }
+        };
         let client = Arc::new(Mutex::new(
             tokio::time::timeout(
                 std::time::Duration::from_secs(config.connect_timeout_secs),
-                SshClient::connect(
-                    host_name,
-                    entry,
-                    &profile,
-                    root,
-                    password,
-                    &config.known_hosts_file,
-                ),
+                connect,
             )
             .await
             .map_err(|_| {
@@ -132,6 +177,7 @@ impl ConnectionPool {
             PooledConnection {
                 client: client.clone(),
                 last_used: Instant::now(),
+                expires_at,
             },
         );
         Ok(client)
