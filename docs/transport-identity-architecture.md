@@ -31,6 +31,44 @@ trait PeerProbe { /* authenticated reachability and identity */ }
 
 Small capability traits avoid forcing Mesh RPC into SSH channel semantics or forcing SSH into Mesh's peer/RPC model. A session registry should key sessions by `(transport, endpoint, identity_profile)` and expose transport-neutral lifecycle metadata.
 
+## Ephemeral SSH endpoint bindings
+
+Provider and infrastructure extensions compose with Shuttle through the harness; Shuttle does not depend on AWS, Kubernetes, or their CLIs. The narrow handoff is an ephemeral, provenance-aware SSH endpoint binding: effectively a short-lived internal `known_hosts` record with a logical-host identity and endpoint override.
+
+The binding keeps three values distinct:
+
+- **Logical host** — the durable Shuttle policy identity, such as `payments-prod-17`.
+- **Network endpoint** — the temporary socket, such as `127.0.0.1:49152` from an SSM port-forward.
+- **Cryptographic identity** — the expected SSH host-key fingerprint.
+
+A minimal representation is:
+
+```rust
+struct EphemeralSshEndpoint {
+    logical_host: String,
+    address: String,
+    port: u16,
+    host_key_fingerprint: String,
+    expires_at: SystemTime,
+    provenance: String,
+}
+```
+
+The harness validates the producer and preserves provenance before passing the binding to Shuttle. Shuttle then:
+
+1. requires `logical_host` to be permitted by its existing host policy;
+2. rejects expired bindings;
+3. connects to the temporary `address:port` without treating it as a new authorized host;
+4. verifies the presented SSH host key against `host_key_fingerprint`;
+5. authenticates with the configured profile for `logical_host`; and
+6. includes binding provenance in structured operation evidence.
+
+A binding cannot widen `allowed_hosts`, waive host-key verification, select arbitrary credentials, or become permanent configuration. It contains no private key, provider credential, command, or provider-specific authorization. Provider references such as an AWS SSM session ID remain opaque provenance.
+
+This supports composition without direct extension coupling. For example, an AWS tool may create an SSM port-forward and return a temporary endpoint; the harness mediates the binding; Shuttle performs verified SSH. EC2 Instance Connect instead composes by publishing Shuttle's public key through AWS and then using Shuttle's ordinary configured endpoint. Pure SSM command execution remains an AWS operation and does not pass through Shuttle.
+
+Do not generalize this into a fleet lease or orchestration framework. Introduce a broader transport-neutral endpoint contract only when a second transport, such as Styrene Mesh, demonstrates requirements beyond this SSH-specific binding.
+
 ## Stable operation results
 
 Results should expose a `transport` discriminator (`ssh` now, `mesh` later) while retaining operation-level fields. Tunnel records already do this. Future changes should add it to execution, transfer, and probe results without renaming existing fields.
@@ -80,6 +118,9 @@ This sequence avoids speculative abstraction while preserving a clean migration 
 Every transport implementation must test:
 
 - identity/profile isolation in session reuse;
+- ephemeral endpoint expiry and logical-host policy enforcement;
+- endpoint-override host-key fingerprint verification;
+- provenance preservation without provider credential leakage;
 - reconnect after a dead session;
 - bounded output and transfer sizes;
 - timeout and cancellation behavior;
