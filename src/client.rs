@@ -1,5 +1,5 @@
 use crate::auth;
-use crate::config::HostEntry;
+use crate::config::{AuthProfile, HostEntry};
 use russh::client;
 use russh_keys::key::PublicKey;
 use std::net::ToSocketAddrs;
@@ -16,7 +16,9 @@ impl SshClient {
     pub async fn connect(
         host_name: &str,
         entry: &HostEntry,
-        root: &RootSecret,
+        profile: &AuthProfile,
+        root: Option<&RootSecret>,
+        password: Option<String>,
         known_hosts_path: &Path,
     ) -> Result<Self, ClientError> {
         let addr = format!("{}:{}", entry.address, entry.port);
@@ -42,17 +44,32 @@ impl SshClient {
             .await
             .map_err(ClientError::Connection)?;
 
-        let key_pair = auth::derive_key_pair(root, &entry.identity_label)
-            .map_err(|e| ClientError::Auth(e.to_string()))?;
-
-        let authenticated = handle
-            .authenticate_publickey(&entry.user, key_pair)
-            .await
-            .map_err(ClientError::Connection)?;
+        let authenticated = match profile {
+            AuthProfile::PublicKey { identity_label } => {
+                let root = root.ok_or_else(|| {
+                    ClientError::Auth("public-key identity is unavailable".to_string())
+                })?;
+                let key_pair = auth::derive_key_pair(root, identity_label)
+                    .map_err(|error| ClientError::Auth(error.to_string()))?;
+                handle
+                    .authenticate_publickey(&entry.user, key_pair)
+                    .await
+                    .map_err(ClientError::Connection)?
+            }
+            AuthProfile::Password { .. } => {
+                let password = password.ok_or_else(|| {
+                    ClientError::Auth("configured password secret is unavailable".to_string())
+                })?;
+                handle
+                    .authenticate_password(&entry.user, password)
+                    .await
+                    .map_err(ClientError::Connection)?
+            }
+        };
 
         if !authenticated {
             return Err(ClientError::Auth(
-                "server rejected public key".to_string(),
+                "server rejected selected authentication profile".to_string(),
             ));
         }
 
@@ -218,7 +235,7 @@ impl client::Handler for ShuttleHandler {
         server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
         let fp = server_public_key.fingerprint();
-        let fp_str = format!("{fp}");
+        let fp_str = fp.to_string();
         tracing::debug!(host = %self.host_name, fingerprint = %fp_str, "checking server key");
 
         match check_known_host(&self.known_hosts_path, &self.host_name, &fp_str) {
@@ -237,7 +254,9 @@ impl client::Handler for ShuttleHandler {
                         fingerprint = %fp_str,
                         "trust-on-first-use: recording new host key"
                     );
-                    if let Err(e) = record_host_key(&self.known_hosts_path, &self.host_name, &fp_str) {
+                    if let Err(e) =
+                        record_host_key(&self.known_hosts_path, &self.host_name, &fp_str)
+                    {
                         tracing::error!(
                             host = %self.host_name,
                             error = %e,
@@ -266,11 +285,7 @@ enum KnownHostResult {
     Unknown,
 }
 
-fn check_known_host(
-    path: &Path,
-    host_name: &str,
-    server_fingerprint: &str,
-) -> KnownHostResult {
+fn check_known_host(path: &Path, host_name: &str, server_fingerprint: &str) -> KnownHostResult {
     let content = match std::fs::read_to_string(path) {
         Ok(c) => c,
         Err(_) => return KnownHostResult::Unknown,

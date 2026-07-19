@@ -32,7 +32,7 @@ path = "src/lib.rs"
 # Omegon extension SDK — published to crates.io so `omegon extension install`
 # can clone-and-build this repo standalone without sibling repos checked
 # out under ../omegon/.
-omegon-extension = "0.20"
+omegon-extension = "0.25"
 
 # Styrene identity — HKDF key derivation + ed25519.
 styrene-identity = { version = "0.3", features = ["file-signer"] }
@@ -45,6 +45,7 @@ russh-sftp = "2"
 # Crypto
 ed25519-dalek = { version = "=2.1.1", features = ["rand_core"] }
 ssh-key = { version = "0.6", features = ["ed25519"] }
+secrecy = "0.10"
 zeroize = { version = "1", features = ["derive"] }
 rand_core = { version = "0.6", features = ["getrandom"] }
 

@@ -1,3 +1,4 @@
+use base64::Engine;
 use ed25519_dalek::SigningKey;
 use russh_keys::key::KeyPair;
 use std::sync::Arc;
@@ -29,6 +30,18 @@ pub fn derive_public_key_bytes(root: &RootSecret, label: &str) -> Result<[u8; 32
     seed.zeroize();
     let verifying_key = signing_key.verifying_key();
     Ok(verifying_key.to_bytes())
+}
+
+pub fn public_key_openssh(root: &RootSecret, label: &str) -> Result<String, AuthError> {
+    let bytes = derive_public_key_bytes(root, label)?;
+    let algorithm = b"ssh-ed25519";
+    let mut wire = Vec::with_capacity(4 + algorithm.len() + 4 + bytes.len());
+    wire.extend_from_slice(&(algorithm.len() as u32).to_be_bytes());
+    wire.extend_from_slice(algorithm);
+    wire.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    wire.extend_from_slice(&bytes);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(wire);
+    Ok(format!("ssh-ed25519 {encoded} shuttle-{label}"))
 }
 
 /// Compute a hex fingerprint of the public key for display.

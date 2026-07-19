@@ -28,9 +28,7 @@ struct SshKeyFile {
 /// - The output is a migration plan, not executable config
 /// - Identity file paths are exposed as basenames only, not full paths
 /// - known_hosts content is counted, not returned
-pub async fn ssh_migrate_analyze(
-    _params: &Value,
-) -> omegon_extension::Result<Value> {
+pub async fn ssh_migrate_analyze(_params: &Value) -> omegon_extension::Result<Value> {
     let ssh_dir = dirs::home_dir()
         .map(|h| h.join(".ssh"))
         .unwrap_or_else(|| PathBuf::from("/nonexistent"));
@@ -167,11 +165,7 @@ pub async fn ssh_migrate_analyze(
 
     let keygen_commands: Vec<String> = labels
         .iter()
-        .map(|label| {
-            format!(
-                "shuttle-keygen ~/.config/styrene/identity.key {label}"
-            )
-        })
+        .map(|label| format!("shuttle-keygen ~/.config/styrene/identity.key {label}"))
         .collect();
 
     report["key_files"] = json!(keys);
@@ -361,9 +355,7 @@ fn toml_escape(s: &str) -> String {
 
 /// Sanitize a string for display in JSON output — prevent control characters.
 fn sanitize_for_display(s: &str) -> String {
-    s.chars()
-        .filter(|c| !c.is_control())
-        .collect()
+    s.chars().filter(|c| !c.is_control()).collect()
 }
 
 fn suggest_label(key_file: &str, hosts: &[String]) -> String {
@@ -395,8 +387,5 @@ fn suggest_label(key_file: &str, hosts: &[String]) -> String {
         }
     }
 
-    sanitize_toml_key(
-        basename
-            .trim_start_matches("id_")
-    ).to_lowercase()
+    sanitize_toml_key(basename.trim_start_matches("id_")).to_lowercase()
 }

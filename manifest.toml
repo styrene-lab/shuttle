@@ -2,7 +2,7 @@
 name = "shuttle"
 version = "0.1.0"
 description = "Pure-Rust SSH remote execution — run commands, transfer files, manage tunnels via styrene-identity HKDF-derived keys."
-sdk_version = "0.19"
+sdk_version = "0.25"
 
 [runtime]
 type = "native"
@@ -18,6 +18,10 @@ guidance = "SKILL.md"
 # NOTE: Shuttle requires the STYRENE_PASSPHRASE environment variable to be set
 # before omegon starts. This unlocks the encrypted identity file used for
 # SSH key derivation. Set it in the omegon service config or secrets manager.
+
+[secrets]
+required = ["VANDERLYN_TRUENAS_SHUTTLE_PASSWORD"]
+optional = []
 
 [config.hosts_file]
 type = "string"
@@ -42,6 +46,7 @@ type = "string"
 label = "Allowed hosts"
 description = "Comma-separated host names the agent may connect to. Required unless allow_all_hosts is true."
 required = false
+default = "truenas"
 
 [config.allow_all_hosts]
 type = "boolean"

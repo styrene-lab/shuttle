@@ -24,7 +24,7 @@ mod config_tests {
         assert_eq!(entry.address, "10.0.1.50");
         assert_eq!(entry.user, "deploy");
         assert_eq!(entry.port, 2222);
-        assert_eq!(entry.identity_label, "prod");
+        assert_eq!(entry.identity_label.as_deref(), Some("prod"));
         assert!(entry.trust_on_first_use);
     }
 
@@ -215,15 +215,124 @@ mod auth_tests {
         assert_eq!(fp.len(), 64);
         assert!(fp.chars().all(|c| c.is_ascii_hexdigit()));
     }
+    #[test]
+    fn public_key_openssh_has_expected_shape() {
+        let root = RootSecret::new([42u8; 32]);
+        let key = shuttle::auth::public_key_openssh(&root, "truenas-managed").unwrap();
+        assert!(key.starts_with("ssh-ed25519 "));
+        assert!(key.ends_with(" shuttle-truenas-managed"));
+        assert_eq!(key.split_whitespace().count(), 3);
+    }
 }
 
-// ── Tool schema tests ─────────────────────────────────────────────────────
+// ── Authentication profile tests ─────────────────────────────────────────
+
+mod profile_tests {
+    use super::*;
+    use shuttle::config::{AuthProfile, ConfigError, HostEntry};
+
+    #[test]
+    fn resolves_default_and_explicit_profiles_without_fallback() {
+        let host: HostEntry = toml::from_str(
+            r#"
+address = "192.168.0.10"
+user = "omegon"
+default_auth = "bootstrap"
+
+[auth.bootstrap]
+method = "password"
+secret = "VANDERLYN_TRUENAS_SHUTTLE_PASSWORD"
+
+[auth.managed]
+method = "public_key"
+identity_label = "truenas-managed"
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            host.resolve_auth(None).unwrap(),
+            (
+                "bootstrap".to_string(),
+                AuthProfile::Password {
+                    secret: "VANDERLYN_TRUENAS_SHUTTLE_PASSWORD".to_string()
+                }
+            )
+        );
+        assert_eq!(
+            host.resolve_auth(Some("managed")).unwrap(),
+            (
+                "managed".to_string(),
+                AuthProfile::PublicKey {
+                    identity_label: "truenas-managed".to_string()
+                }
+            )
+        );
+        assert!(matches!(
+            host.resolve_auth(Some("missing")),
+            Err(ConfigError::AuthProfileNotFound(_))
+        ));
+    }
+
+    #[test]
+    fn rejects_missing_default_and_ambiguous_legacy_profile() {
+        let no_default: HostEntry = toml::from_str(
+            r#"
+address = "192.168.0.10"
+user = "omegon"
+[auth.password]
+method = "password"
+secret = "PASSWORD"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            no_default.resolve_auth(None),
+            Err(ConfigError::DefaultAuthRequired)
+        ));
+
+        let ambiguous: HostEntry = toml::from_str(
+            r#"
+address = "192.168.0.10"
+user = "omegon"
+identity_label = "legacy"
+default_auth = "key"
+[auth.key]
+method = "public_key"
+identity_label = "managed"
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            ambiguous.resolve_auth(None),
+            Err(ConfigError::AmbiguousAuth)
+        ));
+    }
+
+    #[tokio::test]
+    async fn bootstrap_replaces_previous_secret_values() {
+        let store = shuttle::secrets::SecretStore::new();
+        store
+            .bootstrap(HashMap::from([(
+                "PASSWORD".to_string(),
+                "first".to_string(),
+            )]))
+            .await;
+        assert_eq!(store.expose("PASSWORD").await.as_deref(), Some("first"));
+
+        store
+            .bootstrap(HashMap::from([("OTHER".to_string(), "second".to_string())]))
+            .await;
+        assert!(store.expose("PASSWORD").await.is_none());
+        assert_eq!(store.expose("OTHER").await.as_deref(), Some("second"));
+    }
+}
 
 mod tool_tests {
     #[test]
     fn tool_definitions_has_expected_count() {
         let tools = shuttle::tools::tool_definitions();
-        assert_eq!(tools.len(), 12);
+        assert_eq!(tools.len(), 13);
     }
 
     #[test]
@@ -262,6 +371,7 @@ mod tool_tests {
             "sftp_read",
             "ssh_tunnel_open",
             "ssh_ping",
+            "ssh_public_key",
         ];
         let tools = shuttle::tools::tool_definitions();
         for tool in &tools {

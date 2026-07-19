@@ -951,9 +951,9 @@ dependencies = [
 
 [[package]]
 name = "omegon-extension"
-version = "0.20.0"
+version = "0.25.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "273fb9f4a4a34a2d9576172cddb35a96c0b89ed8f653f95ac6f829e2b0645fce"
+checksum = "92a92797b03da96147ad3711539f5f257fb65ecb5bce0d19b5fec54c6e1db355"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -981,6 +981,7 @@ dependencies = [
  "russh",
  "russh-keys",
  "russh-sftp",
+ "secrecy",
  "serde",
  "serde_json",
  "ssh-key",
@@ -1062,16 +1063,6 @@ dependencies = [
  "thiserror 1.0.69",
  "tokio",
  "windows",
-]
-
-[[package]]
-name = "parking_lot"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93857453250e3077bd71ff98b6a65ea6621a19bb0f559a85248955ac12c45a1a"
-dependencies = [
- "lock_api",
- "parking_lot_core",
 ]
 
 [[package]]
@@ -1513,6 +1504,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "secrecy"
+version = "0.10.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e891af845473308773346dc847b2c23ee78fe442e0472ac50e22a18a93d3ae5a"
+dependencies = [
+ "zeroize",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1828,7 +1828,6 @@ dependencies = [
  "bytes",
  "libc",
  "mio",
- "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
  "socket2",

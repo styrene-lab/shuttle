@@ -241,7 +241,10 @@ fn test_sftp_ls() {
         json!({"host": "test-local", "path": "/tmp/test-dir"}),
     );
     let entries = result["entries"].as_array().unwrap();
-    let names: Vec<&str> = entries.iter().map(|e| e["name"].as_str().unwrap()).collect();
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|e| e["name"].as_str().unwrap())
+        .collect();
     assert!(names.contains(&"a.txt"));
     assert!(names.contains(&"b.txt"));
 }
@@ -253,7 +256,10 @@ fn test_sftp_read() {
         "sftp_read",
         json!({"host": "test-local", "path": "/tmp/test-file.txt"}),
     );
-    assert!(result["content"].as_str().unwrap().contains("hello from shuttle"));
+    assert!(result["content"]
+        .as_str()
+        .unwrap()
+        .contains("hello from shuttle"));
 }
 
 #[test]
@@ -312,10 +318,7 @@ fn test_tunnel_open_close_lifecycle() {
     assert_eq!(tunnels.len(), 1);
     assert_eq!(tunnels[0]["tunnel_id"].as_str().unwrap(), tunnel_id);
 
-    let close_result = h.call_tool(
-        "ssh_tunnel_close",
-        json!({"tunnel_id": tunnel_id}),
-    );
+    let close_result = h.call_tool("ssh_tunnel_close", json!({"tunnel_id": tunnel_id}));
     assert_eq!(close_result["closed"], true);
 
     let list_after = h.call_tool("ssh_tunnel_list", json!({}));
@@ -344,8 +347,13 @@ fn test_disallowed_host() {
         "ssh_exec",
         json!({"host": "not-configured", "command": "echo hi"}),
     );
-    assert!(err["message"].as_str().unwrap().contains("not in allowlist")
-        || err["message"].as_str().unwrap().contains("not found"));
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap()
+            .contains("not in allowlist")
+            || err["message"].as_str().unwrap().contains("not found")
+    );
 }
 
 #[test]

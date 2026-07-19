@@ -1,5 +1,6 @@
-use crate::config::ShuttleConfig;
+use crate::config::{AuthProfile, ShuttleConfig};
 use crate::pool::ConnectionPool;
+use crate::secrets::SecretStore;
 use crate::tools;
 use crate::tunnel::TunnelManager;
 use serde_json::{json, Value};
@@ -13,6 +14,7 @@ pub struct ShuttleExtension {
     config: Arc<RwLock<ShuttleConfig>>,
     pool: ConnectionPool,
     tunnels: TunnelManager,
+    secrets: SecretStore,
     /// Holds the signer so re-derivation works after TTL expiry without
     /// needing the env var again.
     signer: Arc<RwLock<Option<Box<dyn IdentitySigner>>>>,
@@ -48,6 +50,12 @@ impl CachedRoot {
     }
 }
 
+impl Default for ShuttleExtension {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShuttleExtension {
     pub fn new() -> Self {
         let config = ShuttleConfig::default();
@@ -55,6 +63,7 @@ impl ShuttleExtension {
             config: Arc::new(RwLock::new(config)),
             pool: ConnectionPool::new(),
             tunnels: TunnelManager::new(),
+            secrets: SecretStore::new(),
             signer: Arc::new(RwLock::new(None)),
             root_cache: Arc::new(RwLock::new(CachedRoot::empty())),
         }
@@ -137,6 +146,7 @@ impl ShuttleExtension {
             "ssh_tunnel_list" => self.tool_tunnel_list(params).await,
             "ssh_hosts" => self.tool_ssh_hosts(params).await,
             "ssh_ping" => self.tool_ssh_ping(params).await,
+            "ssh_public_key" => self.tool_ssh_public_key(params).await,
             "ssh_migrate_analyze" => self.tool_migrate_analyze(params).await,
             _ => Err(omegon_extension::Error::method_not_found(&format!(
                 "tool '{name}'"
@@ -151,16 +161,42 @@ impl ShuttleExtension {
             .ok_or_else(|| omegon_extension::Error::invalid_params("missing 'host'"))
     }
 
+    fn extract_auth(params: &Value) -> omegon_extension::Result<Option<&str>> {
+        match params.get("auth") {
+            None => Ok(None),
+            Some(value) => value
+                .as_str()
+                .map(Some)
+                .ok_or_else(|| omegon_extension::Error::invalid_params("'auth' must be a string")),
+        }
+    }
+
     async fn acquire_client(
         &self,
         host_name: &str,
+        auth_name: Option<&str>,
     ) -> omegon_extension::Result<Arc<tokio::sync::Mutex<crate::client::SshClient>>> {
         let config = self.config.read().await;
-        let root = self.root_secret().await?;
+        let entry = config
+            .resolve_host(host_name)
+            .map_err(|error| omegon_extension::Error::invalid_params(error.to_string()))?;
+        let (_, profile) = entry
+            .resolve_auth(auth_name)
+            .map_err(|error| omegon_extension::Error::invalid_params(error.to_string()))?;
+
+        let root = match &profile {
+            AuthProfile::PublicKey { .. } => Some(self.root_secret().await?),
+            AuthProfile::Password { .. } => None,
+        };
+        let password = match &profile {
+            AuthProfile::Password { secret } => self.secrets.expose(secret).await,
+            AuthProfile::PublicKey { .. } => None,
+        };
+
         self.pool
-            .acquire(host_name, &config, &root)
+            .acquire(host_name, auth_name, &config, root.as_ref(), password)
             .await
-            .map_err(|e| omegon_extension::Error::internal_error(e.to_string()))
+            .map_err(|error| omegon_extension::Error::internal_error(error.to_string()))
     }
 
     // ── Tool implementations ─────────────────────────────────────────────
@@ -176,7 +212,8 @@ impl ShuttleExtension {
             command_len = command.len(),
             "executing remote command"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         let result = crate::exec::ssh_exec(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -210,7 +247,8 @@ impl ShuttleExtension {
             script_len = script.len(),
             "executing remote script"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         let result = crate::exec::ssh_script(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -241,7 +279,8 @@ impl ShuttleExtension {
             remote_hash = format!("{:016x}", fxhash(remote.as_bytes())),
             "uploading file"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         let result = crate::transfer::scp_push(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -272,7 +311,8 @@ impl ShuttleExtension {
             local_hash = format!("{:016x}", fxhash(local.as_bytes())),
             "downloading file"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         crate::transfer::scp_pull(&client, &config, &params).await
     }
@@ -286,7 +326,8 @@ impl ShuttleExtension {
             path_hash = format!("{:016x}", fxhash(path.as_bytes())),
             "listing remote directory"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         crate::transfer::sftp_ls(&client, &config, &params).await
     }
@@ -300,7 +341,8 @@ impl ShuttleExtension {
             path_hash = format!("{:016x}", fxhash(path.as_bytes())),
             "reading remote file"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         let result = crate::transfer::sftp_read(&client, &config, &params).await;
         if let Ok(ref v) = result {
@@ -353,7 +395,8 @@ impl ShuttleExtension {
             remote_port,
             "opening tunnel"
         );
-        let client = self.acquire_client(host).await?;
+        let auth = Self::extract_auth(&params)?;
+        let client = self.acquire_client(host, auth).await?;
         let config = self.config.read().await;
         self.tunnels
             .open(
@@ -407,11 +450,42 @@ impl ShuttleExtension {
         Ok(json!({ "hosts": hosts }))
     }
 
+    async fn tool_ssh_public_key(&self, params: Value) -> omegon_extension::Result<Value> {
+        let host = Self::extract_host(&params)?;
+        let auth = Self::extract_auth(&params)?;
+        let config = self.config.read().await;
+        let entry = config
+            .resolve_host(host)
+            .map_err(|error| omegon_extension::Error::invalid_params(error.to_string()))?;
+        let (auth_name, profile) = entry
+            .resolve_auth(auth)
+            .map_err(|error| omegon_extension::Error::invalid_params(error.to_string()))?;
+        let AuthProfile::PublicKey { identity_label } = profile else {
+            return Err(omegon_extension::Error::invalid_params(
+                "selected authentication profile is not public_key",
+            ));
+        };
+        drop(config);
+
+        let root = self.root_secret().await?;
+        let public_key = crate::auth::public_key_openssh(&root, &identity_label)
+            .map_err(|error| omegon_extension::Error::internal_error(error.to_string()))?;
+        let fingerprint = crate::auth::public_key_fingerprint(&root, &identity_label)
+            .map_err(|error| omegon_extension::Error::internal_error(error.to_string()))?;
+        Ok(json!({
+            "host": host,
+            "auth": auth_name,
+            "public_key": public_key,
+            "fingerprint": fingerprint,
+        }))
+    }
+
     async fn tool_ssh_ping(&self, params: Value) -> omegon_extension::Result<Value> {
         let host = Self::extract_host(&params)?;
         tracing::info!(tool = "ssh_ping", host, "testing connectivity");
         let start = std::time::Instant::now();
-        match self.acquire_client(host).await {
+        let auth = Self::extract_auth(&params)?;
+        match self.acquire_client(host, auth).await {
             Ok(_client) => {
                 let elapsed = start.elapsed();
                 tracing::info!(
@@ -467,7 +541,7 @@ impl omegon_extension::Extension for ShuttleExtension {
                     "extension_info": {
                         "name": self.name(),
                         "version": self.version(),
-                        "sdk_version": "0.19"
+                        "sdk_version": "0.25"
                     },
                     "capabilities": {
                         "tools": true,
@@ -478,6 +552,25 @@ impl omegon_extension::Extension for ShuttleExtension {
 
             "get_tools" | "tools/list" => Ok(json!(tools::tool_definitions())),
 
+            "bootstrap_secrets" => {
+                let values: HashMap<String, String> = params
+                    .as_object()
+                    .map(|object| {
+                        object
+                            .iter()
+                            .filter_map(|(name, value)| {
+                                value.as_str().map(|value| (name.clone(), value.to_owned()))
+                            })
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let count = values.len();
+                let names: Vec<&str> = values.keys().map(String::as_str).collect();
+                tracing::info!(?names, "bootstrap secrets received");
+                self.secrets.bootstrap(values).await;
+                Ok(json!({ "acknowledged": true, "received": count }))
+            }
+
             "bootstrap_config" => {
                 let map: HashMap<String, Value> =
                     serde_json::from_value(params).unwrap_or_default();
@@ -487,7 +580,11 @@ impl omegon_extension::Extension for ShuttleExtension {
 
             "execute_tool" | "tools/call" => {
                 let name = params.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                let args = params.get("arguments").cloned().unwrap_or(json!({}));
+                let args = params
+                    .get("arguments")
+                    .or_else(|| params.get("args"))
+                    .cloned()
+                    .unwrap_or(json!({}));
                 self.execute_tool(name, args).await
             }
 

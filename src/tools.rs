@@ -13,6 +13,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
                     },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
+                    },
                     "command": {
                         "type": "string",
                         "description": "Shell command to execute on the remote host."
@@ -35,6 +39,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "host": {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
+                    },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
                     },
                     "script": {
                         "type": "string",
@@ -63,6 +71,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
                     },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
+                    },
                     "local_path": {
                         "type": "string",
                         "description": "Absolute path to the local file."
@@ -85,6 +97,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "host": {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
+                    },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
                     },
                     "remote_path": {
                         "type": "string",
@@ -109,6 +125,10 @@ pub fn tool_definitions() -> Vec<Value> {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
                     },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
+                    },
                     "path": {
                         "type": "string",
                         "description": "Absolute directory path on the remote host."
@@ -127,6 +147,10 @@ pub fn tool_definitions() -> Vec<Value> {
                     "host": {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
+                    },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
                     },
                     "path": {
                         "type": "string",
@@ -210,6 +234,29 @@ pub fn tool_definitions() -> Vec<Value> {
                     "host": {
                         "type": "string",
                         "description": "Host name as defined in hosts.toml."
+                    },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact authentication profile name."
+                    }
+                },
+                "required": ["host"]
+            }
+        }),
+        json!({
+            "name": "ssh_public_key",
+            "label": "SSH Public Key",
+            "description": "Return the OpenSSH public key and fingerprint for a configured public-key profile.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "host": {
+                        "type": "string",
+                        "description": "Host name as defined in hosts.toml."
+                    },
+                    "auth": {
+                        "type": "string",
+                        "description": "Optional exact public-key authentication profile name."
                     }
                 },
                 "required": ["host"]

@@ -8,9 +8,59 @@ pub struct HostEntry {
     pub user: String,
     #[serde(default = "default_port")]
     pub port: u16,
-    pub identity_label: String,
+    #[serde(default)]
+    pub identity_label: Option<String>,
+    #[serde(default)]
+    pub default_auth: Option<String>,
+    #[serde(default)]
+    pub auth: HashMap<String, AuthProfile>,
     #[serde(default)]
     pub trust_on_first_use: bool,
+}
+
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+#[serde(tag = "method", rename_all = "snake_case")]
+pub enum AuthProfile {
+    PublicKey { identity_label: String },
+    Password { secret: String },
+}
+
+impl HostEntry {
+    pub fn resolve_auth(
+        &self,
+        requested: Option<&str>,
+    ) -> Result<(String, AuthProfile), ConfigError> {
+        if self.auth.is_empty() {
+            let label = self
+                .identity_label
+                .as_ref()
+                .ok_or(ConfigError::MissingAuth)?;
+            if let Some(name) = requested {
+                if name != "default" {
+                    return Err(ConfigError::AuthProfileNotFound(name.to_string()));
+                }
+            }
+            return Ok((
+                "default".to_string(),
+                AuthProfile::PublicKey {
+                    identity_label: label.clone(),
+                },
+            ));
+        }
+
+        if self.identity_label.is_some() {
+            return Err(ConfigError::AmbiguousAuth);
+        }
+        let name = requested
+            .or(self.default_auth.as_deref())
+            .ok_or(ConfigError::DefaultAuthRequired)?;
+        let profile = self
+            .auth
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ConfigError::AuthProfileNotFound(name.to_string()))?;
+        Ok((name.to_string(), profile))
+    }
 }
 
 fn default_port() -> u16 {
@@ -235,6 +285,14 @@ pub enum ConfigError {
     HostNotAllowed(String),
     #[error("allowed_hosts is required unless allow_all_hosts=true: {0}")]
     HostAllowlistRequired(String),
+    #[error("host authentication is not configured")]
+    MissingAuth,
+    #[error("legacy identity_label cannot be combined with auth profiles")]
+    AmbiguousAuth,
+    #[error("default_auth is required when auth profiles are configured")]
+    DefaultAuthRequired,
+    #[error("authentication profile not found: {0}")]
+    AuthProfileNotFound(String),
     #[error("failed to read {0}: {1}")]
     Io(String, std::io::Error),
     #[error("failed to parse {0}: {1}")]

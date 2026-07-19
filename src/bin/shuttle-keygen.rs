@@ -25,30 +25,23 @@ async fn main() {
     let signer = FileSigner::with_static_passphrase(identity_path, &passphrase);
 
     if !std::path::Path::new(identity_path).exists() {
-        signer
-            .generate(&passphrase)
-            .unwrap_or_else(|e| {
-                eprintln!("failed to generate identity: {e}");
-                std::process::exit(1);
-            });
+        signer.generate(&passphrase).unwrap_or_else(|e| {
+            eprintln!("failed to generate identity: {e}");
+            std::process::exit(1);
+        });
         eprintln!("created identity: {identity_path}");
     }
 
-    let root = signer
-        .root_secret()
-        .await
-        .unwrap_or_else(|e| {
-            eprintln!("failed to unlock identity: {e}");
-            std::process::exit(1);
-        });
+    let root = signer.root_secret().await.unwrap_or_else(|e| {
+        eprintln!("failed to unlock identity: {e}");
+        std::process::exit(1);
+    });
 
     let deriver = KeyDeriver::new(root.as_bytes());
-    let mut seed = deriver
-        .derive_ssh_user_key(label)
-        .unwrap_or_else(|e| {
-            eprintln!("failed to derive key for label '{label}': {e}");
-            std::process::exit(1);
-        });
+    let mut seed = deriver.derive_ssh_user_key(label).unwrap_or_else(|e| {
+        eprintln!("failed to derive key for label '{label}': {e}");
+        std::process::exit(1);
+    });
 
     let signing_key = SigningKey::from_bytes(&seed);
     seed.zeroize();
