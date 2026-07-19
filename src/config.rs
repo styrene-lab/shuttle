@@ -75,7 +75,9 @@ pub struct ShuttleConfig {
     pub hosts_file: PathBuf,
     pub known_hosts_file: PathBuf,
     pub default_timeout_secs: u64,
+    pub connect_timeout_secs: u64,
     pub max_output_bytes: usize,
+    pub max_transfer_bytes: usize,
     pub allowed_hosts: Option<Vec<String>>,
     pub allow_all_hosts: bool,
     pub allowed_tunnel_destinations: Option<Vec<String>>,
@@ -98,7 +100,9 @@ impl Default for ShuttleConfig {
             hosts_file: base.join("hosts.toml"),
             known_hosts_file: base.join("known_hosts"),
             default_timeout_secs: 30,
+            connect_timeout_secs: 10,
             max_output_bytes: 1_048_576,
+            max_transfer_bytes: 67_108_864,
             allowed_hosts: None,
             allow_all_hosts: false,
             allowed_tunnel_destinations: None,
@@ -167,6 +171,12 @@ impl ShuttleConfig {
         }
         if let Some(v) = config.get("connection_pool_size").and_then(|v| v.as_u64()) {
             self.connection_pool_size = (v as usize).clamp(1, 32);
+        }
+        if let Some(v) = config.get("connect_timeout_secs").and_then(|v| v.as_u64()) {
+            self.connect_timeout_secs = v.clamp(1, 300);
+        }
+        if let Some(v) = config.get("max_transfer_bytes").and_then(|v| v.as_u64()) {
+            self.max_transfer_bytes = (v as usize).clamp(1024, 1024 * 1024 * 1024);
         }
         if let Some(v) = config.get("allow_all_hosts").and_then(|v| v.as_bool()) {
             self.allow_all_hosts = v;

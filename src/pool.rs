@@ -85,15 +85,24 @@ impl ConnectionPool {
         }
 
         let client = Arc::new(Mutex::new(
-            SshClient::connect(
-                host_name,
-                entry,
-                &profile,
-                root,
-                password,
-                &config.known_hosts_file,
+            tokio::time::timeout(
+                std::time::Duration::from_secs(config.connect_timeout_secs),
+                SshClient::connect(
+                    host_name,
+                    entry,
+                    &profile,
+                    root,
+                    password,
+                    &config.known_hosts_file,
+                ),
             )
-            .await?,
+            .await
+            .map_err(|_| {
+                ClientError::Timeout(
+                    format!("{host_name} (connect)"),
+                    std::time::Duration::from_secs(config.connect_timeout_secs),
+                )
+            })??,
         ));
 
         let mut entries = self.entries.lock().await;

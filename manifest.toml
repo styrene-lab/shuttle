@@ -72,6 +72,18 @@ label = "Allowed remote write roots"
 description = "Comma-separated remote path prefixes allowed for scp_push. Empty preserves legacy unrestricted remote writes."
 required = false
 
+[config.connect_timeout_secs]
+type = "number"
+label = "Connection timeout (seconds)"
+description = "Maximum time allowed for DNS resolution, SSH negotiation, host-key verification, and authentication."
+default = "10"
+
+[config.max_transfer_bytes]
+type = "number"
+label = "Max transfer size (bytes)"
+description = "Maximum bytes uploaded or downloaded by a single file-transfer operation."
+default = "67108864"
+
 [config.connection_pool_size]
 type = "number"
 label = "Connection pool size"

@@ -165,10 +165,10 @@ pub async fn scp_push(
     let data = tokio::fs::read(&local)
         .await
         .map_err(|e| omegon_extension::Error::internal_error(format!("read {local_path}: {e}")))?;
-    if data.len() > config.max_output_bytes {
+    if data.len() > config.max_transfer_bytes {
         return Err(omegon_extension::Error::invalid_params(format!(
-            "local file exceeds max_output_bytes ({})",
-            config.max_output_bytes
+            "local file exceeds max_transfer_bytes ({})",
+            config.max_transfer_bytes
         )));
     }
 
@@ -218,8 +218,8 @@ pub async fn scp_pull(
         .get("max_bytes")
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
-        .unwrap_or(config.max_output_bytes)
-        .min(config.max_output_bytes);
+        .unwrap_or(config.max_transfer_bytes)
+        .min(config.max_transfer_bytes);
 
     let client_guard = client.lock().await;
     let sftp = client_guard
@@ -332,8 +332,8 @@ pub async fn sftp_read(
         .get("max_bytes")
         .and_then(|v| v.as_u64())
         .map(|v| v as usize)
-        .unwrap_or(config.max_output_bytes)
-        .min(config.max_output_bytes);
+        .unwrap_or(config.max_transfer_bytes)
+        .min(config.max_transfer_bytes);
 
     let client_guard = client.lock().await;
     let sftp = client_guard
