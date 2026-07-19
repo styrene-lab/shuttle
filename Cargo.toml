@@ -4,7 +4,7 @@
 # `omegon-` to match the SDK crate (`omegon-extension`) — the
 # extension's omegon-side identifier and CLI surface stay "shuttle".
 name = "omegon-shuttle"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 license = "MIT"
 repository = "https://github.com/styrene-lab/shuttle"

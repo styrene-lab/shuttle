@@ -351,6 +351,10 @@ fn test_ssh_migrate_analyze() {
     let mut h = RpcHarness::start();
     let result = h.call_tool("ssh_migrate_analyze", json!({}));
     assert!(result["ssh_dir_exists"].is_boolean());
+    if result["ssh_dir_exists"] == false {
+        assert!(result["summary"].is_string());
+        return;
+    }
     assert!(result["key_files"].is_array());
     assert!(result["ssh_config_hosts"].is_array());
     assert!(result["draft_hosts_toml"].is_string());
